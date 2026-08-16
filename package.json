@@ -1,5 +1,8 @@
 {
   "name": "pw-live-proxy",
   "version": "1.0.0",
-  "dependencies": {}
+  "type": "module",
+  "scripts": {
+    "start": "node server.js"
+  }
 }
