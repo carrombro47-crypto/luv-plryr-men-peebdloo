@@ -1,66 +1,105 @@
 export default async function handler(req, res) {
-  // CORS allow karo
+  // CORS
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "*");
+  res.setHeader("Access-Control-Expose-Headers", "*");
 
   if (req.method === "OPTIONS") {
     return res.status(200).end();
   }
 
   const targetUrl = req.query.url;
-
   if (!targetUrl) {
-    return res.status(400).json({ error: "url parameter required" });
+    return res.status(400).send("Missing url parameter");
   }
 
   try {
     const response = await fetch(targetUrl, {
       headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "*/*",
+        "Accept-Language": "en-US,en;q=0.9",
         "Referer": "https://www.pw.live/",
-        "Origin": "https://www.pw.live"
-      }
+        "Origin": "https://www.pw.live",
+        "sec-ch-ua": '"Not_A Brand";v="8", "Chromium";v="120"',
+        "sec-ch-ua-mobile": "?0",
+        "sec-ch-ua-platform": '"Windows"'
+      },
+      redirect: "follow"
     });
 
     if (!response.ok) {
-      return res.status(response.status).send("Failed to fetch stream");
+      console.error("Upstream error:", response.status, response.statusText);
+      return res.status(response.status).send(`Upstream failed: ${response.status}`);
     }
 
     const contentType = response.headers.get("content-type") || "";
-    let body = await response.text();
+    const isM3U8 = contentType.includes("mpegurl") || 
+                   contentType.includes("m3u8") || 
+                   targetUrl.includes(".m3u8");
 
-    // Agar m3u8 file hai to segment links rewrite karo
-    if (contentType.includes("mpegurl") || targetUrl.includes(".m3u8")) {
-      const baseUrl = new URL(targetUrl);
-      
-      // Relative links ko absolute + proxy ke through banao
-      body = body.replace(/(.*\.ts.*)/g, (match) => {
-        // Agar already full URL hai
-        if (match.startsWith("http")) {
-          return `/api/stream?url=${encodeURIComponent(match)}`;
-        }
-        // Relative path hai
-        const fullSegmentUrl = new URL(match, baseUrl).href;
-        return `/api/stream?url=${encodeURIComponent(fullSegmentUrl)}`;
-      });
-
-      // EXT-X-KEY (agar encryption ho) bhi rewrite kar sakte ho
-      body = body.replace(/(URI=")([^"]+)(")/g, (match, p1, uri, p3) => {
-        if (uri.startsWith("http")) {
-          return `\( {p1}/api/stream?url= \){encodeURIComponent(uri)}${p3}`;
-        }
-        const fullKeyUrl = new URL(uri, baseUrl).href;
-        return `\( {p1}/api/stream?url= \){encodeURIComponent(fullKeyUrl)}${p3}`;
-      });
+    // Binary segments (.ts, .m4s, .mp4) ko directly forward karo
+    if (!isM3U8) {
+      const buffer = await response.arrayBuffer();
+      res.setHeader("Content-Type", contentType || "video/mp2t");
+      res.setHeader("Cache-Control", "public, max-age=10");
+      return res.status(200).send(Buffer.from(buffer));
     }
 
-    res.setHeader("Content-Type", contentType || "application/vnd.apple.mpegurl");
-    res.setHeader("Cache-Control", "no-cache");
+    // m3u8 text handle karo
+    let body = await response.text();
+    const baseUrl = new URL(targetUrl);
+
+    // Helper: koi bhi URL ko proxy ke through banao
+    const makeProxyUrl = (rawUrl) => {
+      try {
+        let absolute;
+        if (rawUrl.startsWith("http://") || rawUrl.startsWith("https://")) {
+          absolute = rawUrl;
+        } else {
+          absolute = new URL(rawUrl, baseUrl).href;
+        }
+        return `/api/stream?url=${encodeURIComponent(absolute)}`;
+      } catch (e) {
+        return rawUrl;
+      }
+    };
+
+    // Lines process karo
+    const lines = body.split("\n");
+    const newLines = lines.map(line => {
+      const trimmed = line.trim();
+
+      // Empty or comment
+      if (!trimmed || trimmed.startsWith("#")) {
+        // EXT-X-KEY URI rewrite
+        if (trimmed.includes("URI=")) {
+          return trimmed.replace(/URI="([^"]+)"/, (_, uri) => {
+            return `URI="${makeProxyUrl(uri)}"`;
+          });
+        }
+        // EXT-X-MAP URI rewrite
+        if (trimmed.includes("URI=")) {
+          return trimmed.replace(/URI="([^"]+)"/, (_, uri) => {
+            return `URI="${makeProxyUrl(uri)}"`;
+          });
+        }
+        return line;
+      }
+
+      // Segment line (not starting with #)
+      return makeProxyUrl(trimmed);
+    });
+
+    body = newLines.join("\n");
+
+    res.setHeader("Content-Type", "application/vnd.apple.mpegurl");
+    res.setHeader("Cache-Control", "no-cache, no-store");
     return res.status(200).send(body);
 
   } catch (err) {
-    console.error(err);
-    return res.status(500).json({ error: "Proxy error", message: err.message });
+    console.error("Proxy Error:", err);
+    return res.status(500).send("Proxy error: " + err.message);
   }
 }
