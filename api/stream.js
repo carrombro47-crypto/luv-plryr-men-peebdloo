@@ -1,5 +1,5 @@
 export default async function handler(req, res) {
-  // CORS
+  // Strong CORS
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "*");
@@ -30,28 +30,27 @@ export default async function handler(req, res) {
     });
 
     if (!response.ok) {
-      console.error("Upstream error:", response.status, response.statusText);
       return res.status(response.status).send(`Upstream failed: ${response.status}`);
     }
 
     const contentType = response.headers.get("content-type") || "";
-    const isM3U8 = contentType.includes("mpegurl") || 
-                   contentType.includes("m3u8") || 
-                   targetUrl.includes(".m3u8");
+    const isM3U8 =
+      contentType.includes("mpegurl") ||
+      contentType.includes("m3u8") ||
+      targetUrl.includes(".m3u8");
 
-    // Binary segments (.ts, .m4s, .mp4) ko directly forward karo
+    // Binary segments (.ts / .m4s / .mp4 / keys)
     if (!isM3U8) {
       const buffer = await response.arrayBuffer();
       res.setHeader("Content-Type", contentType || "video/mp2t");
-      res.setHeader("Cache-Control", "public, max-age=10");
+      res.setHeader("Cache-Control", "public, max-age=5");
       return res.status(200).send(Buffer.from(buffer));
     }
 
-    // m3u8 text handle karo
+    // ---------- m3u8 Parsing & Rewriting ----------
     let body = await response.text();
     const baseUrl = new URL(targetUrl);
 
-    // Helper: koi bhi URL ko proxy ke through banao
     const makeProxyUrl = (rawUrl) => {
       try {
         let absolute;
@@ -60,42 +59,39 @@ export default async function handler(req, res) {
         } else {
           absolute = new URL(rawUrl, baseUrl).href;
         }
+        // Proxy ke through bhejo
         return `/api/stream?url=${encodeURIComponent(absolute)}`;
       } catch (e) {
         return rawUrl;
       }
     };
 
-    // Lines process karo
-    const lines = body.split("\n");
-    const newLines = lines.map(line => {
+    const lines = body.split(/\r?\n/);
+    const newLines = lines.map((line) => {
       const trimmed = line.trim();
 
-      // Empty or comment
-      if (!trimmed || trimmed.startsWith("#")) {
-        // EXT-X-KEY URI rewrite
+      // Empty line
+      if (!trimmed) return line;
+
+      // Comment / Tag lines
+      if (trimmed.startsWith("#")) {
+        // EXT-X-KEY, EXT-X-MAP, EXT-X-MEDIA, EXT-X-I-FRAME-STREAM-INF etc.
         if (trimmed.includes("URI=")) {
-          return trimmed.replace(/URI="([^"]+)"/, (_, uri) => {
-            return `URI="${makeProxyUrl(uri)}"`;
-          });
-        }
-        // EXT-X-MAP URI rewrite
-        if (trimmed.includes("URI=")) {
-          return trimmed.replace(/URI="([^"]+)"/, (_, uri) => {
+          return trimmed.replace(/URI="([^"]+)"/gi, (_, uri) => {
             return `URI="${makeProxyUrl(uri)}"`;
           });
         }
         return line;
       }
 
-      // Segment line (not starting with #)
+      // Segment / playlist URL line
       return makeProxyUrl(trimmed);
     });
 
     body = newLines.join("\n");
 
     res.setHeader("Content-Type", "application/vnd.apple.mpegurl");
-    res.setHeader("Cache-Control", "no-cache, no-store");
+    res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
     return res.status(200).send(body);
 
   } catch (err) {
