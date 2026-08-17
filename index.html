@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Live Player</title>
+<script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+html, body { width:100%; height:100%; background:#000; overflow:hidden; }
+.player-wrapper { position:relative; width:100%; height:100%; display:flex; align-items:center; justify-content:center; background:#000; }
+#video { width:100%; height:100%; object-fit:contain; background:#000; }
+
+.live-badge {
+    position:absolute; top:16px; left:16px; display:flex; align-items:center; gap:8px;
+    background:rgba(0,0,0,0.7); padding:5px 12px 5px 10px; border-radius:4px; z-index:10;
+    pointer-events:none; border-left:3px solid #ff2d2d;
+}
+.live-dot { width:8px; height:8px; background:#ff2d2d; border-radius:50%; animation:blink 1s ease-in-out infinite; }
+.live-text { color:#fff; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif; font-size:12px; font-weight:600; letter-spacing:0.5px; text-transform:uppercase; }
+@keyframes blink { 0%,100% { opacity:1; } 50% { opacity:0.2; } }
+
+.loading {
+    position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
+    color:rgba(255,255,255,0.6); font-size:13px; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;
+    z-index:1; text-align:center; max-width:80%;
+}
+.spinner {
+    width:32px; height:32px; margin:0 auto 12px;
+    border:2px solid rgba(255,255,255,0.06); border-top:2px solid rgba(255,255,255,0.25);
+    border-radius:50%; animation:spin 0.7s linear infinite;
+}
+@keyframes spin { 0% { transform:rotate(0deg); } 100% { transform:rotate(360deg); } }
+
+#debug {
+    position:absolute; bottom:8px; left:8px; right:8px; max-height:35%;
+    overflow-y:auto; background:rgba(0,0,0,0.85); color:#0f0; font-family:monospace;
+    font-size:11px; padding:8px; border-radius:6px; z-index:20; display:none; white-space:pre-wrap;
+}
+#debug.show { display:block; }
+#debug .err { color:#ff5555; }
+#debug .warn { color:#ffcc00; }
+#debug .info { color:#66ccff; }
+
+.tap-play {
+    position:absolute; z-index:15; background:rgba(255,255,255,0.15); color:#fff;
+    border:1px solid rgba(255,255,255,0.4); padding:10px 20px; border-radius:6px;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;
+    font-size:14px; cursor:pointer; display:none;
+}
+</style>
+</head>
+<body>
+
+<div class="player-wrapper">
+    <div class="loading" id="loading">
+        <div class="spinner"></div>
+        <div id="loadingText">Loading...</div>
+    </div>
+
+    <div class="live-badge">
+        <div class="live-dot"></div>
+        <span class="live-text">LIVE</span>
+    </div>
+
+    <button class="tap-play" id="tapPlay">▶ Tap to Play</button>
+    <video id="video" controls playsinline muted></video>
+    <div id="debug"></div>
+</div>
+
+<script>
+(function() {
+    // ================== CONFIG ==================
+    // Yahan apna signed index.m3u8 URL daalo
+    const originalM3U8 = "https://d3lddq3v5vvgln.cloudfront.net/index_6.m3u8?Signature=V5BjXnb8khJe%7Ewg5aRngpVsP006jjrecxGi5xbsn5UBJhXCnSBMwC7AwqQ0fVtizoQSvUjXmsHiVDU0KpYQ%7E5iotCMI9f58ma3hlFTzzL4nqI5scZ8QGD4LWXHVb9sxXzYKMA3BzaWhBKz9XuktCeOc8tg%7EGZ06YP2aZt%7EYfHIeT5DiJuwwjFkcs8K1ZrCsuSJBtFozsKNWEF9J8zu05hCLKFcqS6cnQlWrHorptNZznHSpSfxRJAl6wfurasdEpw1qxB-VR5qlvEUMkd3ygKqiTiv760Pqgze3Ragv17wEi41ani301MuEUVZOCsp8JoFNliRGgh0-GeiNtnQVSRA__&Key-Pair-Id=APKAXVKMENFCRKTG5XE2&Policy=eyJTdGF0ZW1lbnQiOlt7IlJlc291cmNlIjoiaHR0cHM6Ly9kM2xkZHEzdjV2dmdsbi5jbG91ZGZyb250Lm5ldC8qIiwiQ29uZGl0aW9uIjp7IkRhdGVMZXNzVGhhbiI6eyJBV1M6RXBvY2hUaW1lIjoxNzg2OTU3OTgxfSwiRGF0ZUdyZWF0ZXJUaGFuIjp7IkFXUzpFcG9jaFRpbWUiOjQwOTU1MjMzM319fV19&start=1786935600";
+
+    // Apna proxy domain yahan daalo
+    const PROXY_BASE = "https://pw-live-proxy.vercel.app";   // <-- apna vercel URL
+
+    const DEBUG = true;
+    // ============================================
+
+    // Proxy ke through URL banao
+    const url = PROXY_BASE + "/api/stream?url=" + encodeURIComponent(originalM3U8);
+
+    const video = document.getElementById('video');
+    const loading = document.getElementById('loading');
+    const loadingText = document.getElementById('loadingText');
+    const tapPlay = document.getElementById('tapPlay');
+    const debugEl = document.getElementById('debug');
+
+    function log(msg, type) {
+        console.log('[player]', msg);
+        if (!DEBUG) return;
+        debugEl.classList.add('show');
+        const line = document.createElement('div');
+        if (type) line.className = type;
+        const t = new Date().toLocaleTimeString();
+        line.textContent = '[' + t + '] ' + msg;
+        debugEl.appendChild(line);
+        debugEl.scrollTop = debugEl.scrollHeight;
+    }
+
+    function fail(msg) {
+        loadingText.textContent = '✕ ' + msg;
+        loading.style.color = 'rgba(255,80,80,0.9)';
+        document.querySelector('.spinner').style.display = 'none';
+        log(msg, 'err');
+    }
+
+    if (!originalM3U8 || originalM3U8.includes("YOUR_")) {
+        fail('No stream URL set.');
+        return;
+    }
+
+    log('Original: ' + originalM3U8.slice(0, 80) + '...', 'info');
+    log('Proxy URL: ' + url.slice(0, 90) + '...', 'info');
+
+    if (typeof Hls === 'undefined') {
+        fail('hls.js failed to load');
+        return;
+    }
+    log('hls.js version: ' + (Hls.version || 'unknown'), 'info');
+
+    video.addEventListener('canplay', function() {
+        loading.style.display = 'none';
+        log('canplay — video ready', 'info');
+    });
+
+    video.addEventListener('playing', function() {
+        log('playback started', 'info');
+    });
+
+    video.addEventListener('stalled', function() { log('stalled', 'warn'); });
+    video.addEventListener('waiting', function() { log('buffering...', 'warn'); });
+
+    video.addEventListener('error', function() {
+        const err = video.error;
+        let msg = 'Video error';
+        if (err) {
+            const codes = {1:'ABORTED',2:'NETWORK',3:'DECODE',4:'SRC_NOT_SUPPORTED'};
+            msg += ' (' + (codes[err.code] || err.code) + ')';
+        }
+        fail(msg);
+    });
+
+    function tryPlay() {
+        const p = video.play();
+        if (p && p.catch) {
+            p.then(function() {
+                log('autoplay ok (muted)', 'info');
+            }).catch(function(e) {
+                log('autoplay blocked: ' + e.message, 'warn');
+                tapPlay.style.display = 'block';
+            });
+        }
+    }
+
+    tapPlay.addEventListener('click', function() {
+        video.muted = false;
+        video.play().then(function() {
+            tapPlay.style.display = 'none';
+        }).catch(function(e) {
+            log('manual play failed: ' + e.message, 'err');
+        });
+    });
+
+    if (Hls.isSupported()) {
+        log('Using hls.js (MSE)', 'info');
+        const hls = new Hls({
+            liveDurationInfinity: true,
+            enableWorker: true,
+            lowLatencyMode: true,
+            backBufferLength: 90
+        });
+
+        hls.on(Hls.Events.MEDIA_ATTACHED, function() {
+            log('media attached', 'info');
+        });
+
+        hls.on(Hls.Events.MANIFEST_PARSED, function(_, data) {
+            log('manifest parsed | levels: ' + (data.levels ? data.levels.length : 0), 'info');
+            tryPlay();
+        });
+
+        hls.on(Hls.Events.LEVEL_LOADED, function() {
+            log('level loaded', 'info');
+        });
+
+        hls.on(Hls.Events.ERROR, function(_, data) {
+            const msg = data.type + ' / ' + data.details + (data.fatal ? ' [FATAL]' : '');
+            log(msg, data.fatal ? 'err' : 'warn');
+
+            if (data.fatal) {
+                if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+                    if (data.details === 'manifestLoadError' || data.details === 'manifestLoadTimeOut') {
+                        fail('Manifest load failed — URL expired or proxy issue');
+                    } else {
+                        log('Retrying network...', 'warn');
+                        hls.startLoad();
+                    }
+                } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+                    log('Recovering media error...', 'warn');
+                    hls.recoverMediaError();
+                } else {
+                    fail('Fatal: ' + data.details);
+                    hls.destroy();
+                }
+            }
+        });
+
+        hls.loadSource(url);
+        hls.attachMedia(video);
+
+    } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+        log('Native HLS (Safari)', 'info');
+        video.src = url;
+        video.addEventListener('loadedmetadata', tryPlay);
+    } else {
+        fail('HLS not supported');
+    }
+
+    setTimeout(function() {
+        if (loading.style.display !== 'none') {
+            log('Still loading after 15s → check expired URL or proxy', 'warn');
+        }
+    }, 15000);
+})();
+</script>
+</body>
+</html>
