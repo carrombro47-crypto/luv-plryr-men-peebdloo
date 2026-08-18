@@ -193,6 +193,26 @@ footer { text-align:center; color:var(--muted); font-size:11.5px; padding:14px; 
     var isLive = true;
     var statusPoller = null;
 
+    // Tracks whether playback has EVER actually started for this stream.
+    // Needed to tell apart "stream never came up at all" (real failure —
+    // should show an error) from "was playing fine, then errored near the
+    // live edge" (probably the live class just ended).
+    var manifestEverLoaded = false;
+    var loadWatchdog = null;
+    var LOAD_WATCHDOG_MS = 20000; // agar 20s me stream start na ho to error dikhao
+
+    function clearLoadWatchdog() {
+        if (loadWatchdog) { clearTimeout(loadWatchdog); loadWatchdog = null; }
+    }
+    function armLoadWatchdog() {
+        clearLoadWatchdog();
+        loadWatchdog = setTimeout(function () {
+            if (!manifestEverLoaded) {
+                showError("Stream start nahi ho pa raha — link expire ho gaya ya server slow hai. Thodi der baad refresh karo.");
+            }
+        }, LOAD_WATCHDOG_MS);
+    }
+
     // ─────────── Overlay helpers ───────────
     function showLoading(msg) {
         overlay.classList.remove("hidden");
@@ -273,6 +293,8 @@ footer { text-align:center; color:var(--muted); font-size:11.5px; padding:14px; 
             });
 
             hls.on(Hls.Events.MANIFEST_PARSED, function () {
+                manifestEverLoaded = true;
+                clearLoadWatchdog();
                 video.muted = false;
                 video.play().catch(function () {
                     video.muted = true; // autoplay policy fallback
@@ -290,7 +312,17 @@ footer { text-align:center; color:var(--muted); font-size:11.5px; padding:14px; 
             hls.on(Hls.Events.ERROR, function (_, data) {
                 if (!data.fatal) return;
                 if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
-                    // live edge ke baad 404/403 → ho sakta hai live end ho gayi
+                    if (!manifestEverLoaded) {
+                        // Stream never actually started even once — the previous
+                        // version blindly called hls.startLoad() here on every
+                        // fatal error, which reset hls.js's own retry counter
+                        // and looped forever with the spinner stuck forever and
+                        // NO error ever shown. Now: let it stay stopped and let
+                        // the watchdog above surface a clear error instead.
+                        return;
+                    }
+                    // Playback had already started once — a network error here
+                    // near the live edge usually means the live class just ended.
                     startStatusPolling();
                     hls.startLoad();
                 } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
@@ -300,12 +332,16 @@ footer { text-align:center; color:var(--muted); font-size:11.5px; padding:14px; 
                 }
             });
 
+            armLoadWatchdog();
             hls.loadSource(PLAYLIST_URL);
             hls.attachMedia(video);
 
         } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
             video.src = PLAYLIST_URL; // Safari native HLS
+            armLoadWatchdog();
             video.addEventListener("loadedmetadata", function () {
+                manifestEverLoaded = true;
+                clearLoadWatchdog();
                 video.play().catch(function () {});
             });
         } else {
