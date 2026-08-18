@@ -1,1 +1,414 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PW LIVE PLAYER</title>
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.13/dist/hls.min.js"></script>
+<style>
+:root {
+    --bg:#0b0f1a; --card:rgba(255,255,255,.05); --border:rgba(255,255,255,.1);
+    --accent:#6c5ce7; --accent2:#00d2ff; --text:#e5e7eb; --muted:#9ca3af;
+    --danger:#ff5470; --ok:#2dd4a7;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body {
+    font-family:"Segoe UI",-apple-system,BlinkMacSystemFont,Roboto,Arial,sans-serif;
+    background:radial-gradient(900px 500px at 20% -10%, rgba(108,92,231,.22), transparent 60%),
+               radial-gradient(800px 400px at 110% 0%, rgba(0,210,255,.13), transparent 60%),
+               var(--bg);
+    color:var(--text); min-height:100vh;
+    display:flex; flex-direction:column;
+}
 
+/* ── Header ── */
+header {
+    padding:16px 24px; display:flex; align-items:center; justify-content:space-between;
+    border-bottom:1px solid var(--border);
+    background:rgba(11,15,26,.75); backdrop-filter:blur(12px);
+    position:sticky; top:0; z-index:50;
+}
+.brand { display:flex; align-items:center; gap:12px; }
+.logo {
+    width:36px; height:36px; border-radius:10px; flex-shrink:0;
+    background:linear-gradient(135deg, var(--accent), var(--accent2));
+    display:flex; align-items:center; justify-content:center; font-size:16px;
+    box-shadow:0 4px 16px rgba(108,92,231,.45);
+}
+.brand h1 { font-size:17px; font-weight:700; letter-spacing:.5px; }
+.brand small { display:block; font-size:11px; color:var(--muted); font-weight:400; }
+
+.live-badge { display:none; align-items:center; gap:7px; padding:5px 13px; border-radius:999px;
+    background:rgba(255,45,45,.12); border:1px solid rgba(255,45,45,.4); }
+.live-badge.show { display:flex; }
+.live-dot { width:8px; height:8px; background:#ff2d2d; border-radius:50%; animation:blink 1s infinite; box-shadow:0 0 8px #ff2d2d; }
+@keyframes blink { 50% { opacity:.25; } }
+.live-badge span { font-size:11px; font-weight:700; letter-spacing:1px; color:#ff5c5c; }
+
+/* ── Main ── */
+main { flex:1; display:flex; flex-direction:column; align-items:center; padding:22px 16px 40px; }
+.class-title { font-size:15px; color:var(--muted); margin-bottom:14px; text-align:center;
+    max-width:900px; word-break:break-word; }
+
+/* ── Player shell ── */
+.shell {
+    position:relative; width:100%; max-width:960px; aspect-ratio:16/9;
+    background:#000; border-radius:16px; overflow:hidden;
+    border:1px solid var(--border); box-shadow:0 20px 60px rgba(0,0,0,.5);
+}
+#video { width:100%; height:100%; object-fit:contain; background:#000; display:block; }
+
+/* ── Overlay (loading / ended / error) ── */
+.overlay {
+    position:absolute; inset:0; z-index:20; display:flex; flex-direction:column;
+    align-items:center; justify-content:center; gap:16px; text-align:center;
+    background:rgba(5,8,15,.85); padding:24px;
+}
+.overlay.hidden { display:none; }
+.spinner { width:44px; height:44px; border-radius:50%;
+    border:3px solid rgba(255,255,255,.1); border-top-color:var(--accent2);
+    animation:spin .8s linear infinite; }
+@keyframes spin { to { transform:rotate(360deg); } }
+.overlay .msg { font-size:14px; color:var(--muted); max-width:420px; }
+.overlay .msg.error { color:var(--danger); }
+
+.ended-title { font-size:22px; font-weight:700; }
+.ended-sub { font-size:13px; color:var(--muted); }
+.action-row { display:flex; gap:14px; flex-wrap:wrap; justify-content:center; margin-top:8px; }
+.big-btn {
+    display:inline-flex; align-items:center; gap:9px; padding:14px 28px;
+    border:none; border-radius:12px; font-size:15px; font-weight:700; cursor:pointer;
+    text-decoration:none; color:#fff; transition:transform .15s, box-shadow .2s;
+}
+.big-btn:active { transform:scale(.96); }
+.big-btn.watch { background:linear-gradient(135deg, var(--accent), #8e7bff); box-shadow:0 6px 22px rgba(108,92,231,.45); }
+.big-btn.download { background:linear-gradient(135deg, #0088cc, #00c2ff); box-shadow:0 6px 22px rgba(0,150,220,.45); }
+
+/* ── Custom control bar ── */
+.controls {
+    position:absolute; left:0; right:0; bottom:0; z-index:15;
+    display:flex; align-items:center; gap:10px; padding:10px 14px;
+    background:linear-gradient(transparent, rgba(0,0,0,.75));
+    opacity:0; transition:opacity .25s;
+}
+.shell:hover .controls, .controls.force-show { opacity:1; }
+.cbtn {
+    background:rgba(255,255,255,.12); border:1px solid rgba(255,255,255,.2);
+    color:#fff; border-radius:8px; width:38px; height:38px; cursor:pointer;
+    display:flex; align-items:center; justify-content:center; font-size:15px;
+    flex-shrink:0; transition:background .2s;
+}
+.cbtn:hover { background:rgba(255,255,255,.25); }
+.progress-wrap { flex:1; height:5px; background:rgba(255,255,255,.18); border-radius:99px; cursor:pointer; position:relative; }
+.progress-bar { height:100%; background:linear-gradient(90deg, var(--accent), var(--accent2)); border-radius:99px; width:0%; }
+.time-label { font-size:11.5px; color:#d1d5db; min-width:70px; text-align:center; flex-shrink:0; }
+.go-live {
+    margin-left:auto; padding:0 14px; height:38px; border:none; border-radius:8px;
+    background:rgba(255,45,45,.9); color:#fff; font-size:12px; font-weight:700;
+    letter-spacing:.5px; cursor:pointer; display:flex; align-items:center; gap:6px;
+    flex-shrink:0; transition:background .2s, box-shadow .2s;
+}
+.go-live:hover { background:#ff2d2d; }
+.go-live.at-live { background:rgba(255,255,255,.14); cursor:default; box-shadow:none; }
+.go-live .gdot { width:7px; height:7px; border-radius:50%; background:#fff; }
+
+footer { text-align:center; color:var(--muted); font-size:11.5px; padding:14px; }
+</style>
+</head>
+<body>
+
+<header>
+    <div class="brand">
+        <div class="logo">▶</div>
+        <div>
+            <h1>PW LIVE PLAYER</h1>
+            <small>Quality Education 💎</small>
+        </div>
+    </div>
+    <div class="live-badge" id="liveBadge">
+        <div class="live-dot"></div><span>LIVE</span>
+    </div>
+</header>
+
+<main>
+    <div class="class-title" id="classTitle">{{ name }}</div>
+
+    <div class="shell" id="shell">
+        <video id="video" playsinline></video>
+
+        <!-- Custom controls -->
+        <div class="controls" id="controls">
+            <button class="cbtn" id="btnPlayPause" title="Play/Pause">▶</button>
+            <button class="cbtn" id="btnMute" title="Mute/Unmute">🔊</button>
+            <div class="progress-wrap" id="progressWrap"><div class="progress-bar" id="progressBar"></div></div>
+            <span class="time-label" id="timeLabel">LIVE</span>
+            <button class="go-live" id="btnGoLive"><span class="gdot"></span>Go Live</button>
+            <button class="cbtn" id="btnFullscreen" title="Fullscreen">⛶</button>
+        </div>
+
+        <!-- Overlay -->
+        <div class="overlay" id="overlay">
+            <div class="spinner" id="spinner"></div>
+            <div class="msg" id="overlayMsg">Live class load ho rahi hai…</div>
+            <div id="endedBox" style="display:none; flex-direction:column; align-items:center; gap:10px;">
+                <div class="ended-title">📺 Class Recorded</div>
+                <div class="ended-sub">Live khatam ho gayi — ab aap recording dekh ya download kar sakte ho.</div>
+                <div class="action-row">
+                    <button class="big-btn watch" id="btnWatch">▶ Watch Online</button>
+                    <a class="big-btn download" id="btnDownload" href="#" target="_blank" rel="noopener">⬇ Download Now</a>
+                </div>
+            </div>
+        </div>
+    </div>
+</main>
+
+<footer>Powered By SmartyMS & Team Toxic ❤️‍🩹</footer>
+
+<script>
+(function () {
+    "use strict";
+
+    var NAME = {{ name|tojson }};
+    var INITIAL_STATUS = {{ status|tojson }};
+
+    var video = document.getElementById("video");
+    var shell = document.getElementById("shell");
+    var overlay = document.getElementById("overlay");
+    var overlayMsg = document.getElementById("overlayMsg");
+    var spinner = document.getElementById("spinner");
+    var endedBox = document.getElementById("endedBox");
+    var btnWatch = document.getElementById("btnWatch");
+    var btnDownload = document.getElementById("btnDownload");
+    var liveBadge = document.getElementById("liveBadge");
+    var controls = document.getElementById("controls");
+    var btnPlayPause = document.getElementById("btnPlayPause");
+    var btnMute = document.getElementById("btnMute");
+    var btnFullscreen = document.getElementById("btnFullscreen");
+    var btnGoLive = document.getElementById("btnGoLive");
+    var progressBar = document.getElementById("progressBar");
+    var progressWrap = document.getElementById("progressWrap");
+    var timeLabel = document.getElementById("timeLabel");
+
+    var hls = null;
+    var isLive = true;
+    var statusPoller = null;
+
+    // ─────────── Overlay helpers ───────────
+    function showLoading(msg) {
+        overlay.classList.remove("hidden");
+        spinner.style.display = "block";
+        endedBox.style.display = "none";
+        overlayMsg.style.display = "block";
+        overlayMsg.textContent = msg;
+        overlayMsg.className = "msg";
+    }
+    function showError(msg) {
+        overlay.classList.remove("hidden");
+        spinner.style.display = "none";
+        overlayMsg.textContent = "✕ " + msg;
+        overlayMsg.className = "msg error";
+    }
+    function hideOverlay() { overlay.classList.add("hidden"); }
+
+    function showEnded(st) {
+        overlay.classList.remove("hidden");
+        spinner.style.display = "none";
+        overlayMsg.style.display = "none";
+        endedBox.style.display = "flex";
+        btnDownload.href = st.download_url;
+        btnWatch.onclick = function () {
+            // Watch Online — same player, recorded mp4
+            overlay.classList.add("hidden");
+            liveBadge.classList.remove("show");
+            isLive = false;
+            btnGoLive.style.display = "none";
+            if (hls) { hls.destroy(); hls = null; }
+            video.src = st.watch_url;
+            video.muted = false;
+            video.play().catch(function () {});
+        };
+    }
+
+    // ─────────── Status polling (live end detection) ───────────
+    function startStatusPolling() {
+        if (statusPoller) return;
+        statusPoller = setInterval(function () {
+            fetch("/api/status/" + encodeURIComponent(NAME))
+                .then(function (r) { return r.json(); })
+                .then(function (st) {
+                    if (st.status === "READY") {
+                        clearInterval(statusPoller);
+                        statusPoller = null;
+                        if (hls) { hls.destroy(); hls = null; }
+                        showEnded(st);
+                    }
+                })
+                .catch(function () {});
+        }, 5000);
+    }
+
+    // ─────────── Live player ───────────
+    var PLAYLIST_URL = "/api/live/" + encodeURIComponent(NAME) + "/playlist";
+
+    function startLive() {
+        showLoading("Live class load ho rahi hai…");
+
+        if (typeof Hls === "undefined") {
+            showError("Player load nahi hua — internet check karo.");
+            return;
+        }
+
+        if (Hls.isSupported()) {
+            hls = new Hls({
+                enableWorker: true,
+                lowLatencyMode: true,
+                backBufferLength: 90,
+                liveSyncDurationCount: 3,
+                manifestLoadingMaxRetry: 6,
+                levelLoadingMaxRetry: 6,
+                fragLoadingMaxRetry: 6,
+                manifestLoadingRetryDelay: 1000,
+                levelLoadingRetryDelay: 1000,
+                fragLoadingRetryDelay: 1000,
+            });
+
+            hls.on(Hls.Events.MANIFEST_PARSED, function () {
+                video.muted = false;
+                video.play().catch(function () {
+                    video.muted = true; // autoplay policy fallback
+                    video.play().catch(function () {});
+                });
+            });
+
+            // Playlist mein ENDLIST aa gaya → live khatam
+            hls.on(Hls.Events.LEVEL_LOADED, function (_, data) {
+                if (data.details && data.details.live === false) {
+                    startStatusPolling();
+                }
+            });
+
+            hls.on(Hls.Events.ERROR, function (_, data) {
+                if (!data.fatal) return;
+                if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+                    // live edge ke baad 404/403 → ho sakta hai live end ho gayi
+                    startStatusPolling();
+                    hls.startLoad();
+                } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+                    hls.recoverMediaError();
+                } else {
+                    showError("Stream error — thodi der baad page refresh karo.");
+                }
+            });
+
+            hls.loadSource(PLAYLIST_URL);
+            hls.attachMedia(video);
+
+        } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
+            video.src = PLAYLIST_URL; // Safari native HLS
+            video.addEventListener("loadedmetadata", function () {
+                video.play().catch(function () {});
+            });
+        } else {
+            showError("Is browser mein HLS support nahi hai.");
+        }
+    }
+
+    // ─────────── Video events ───────────
+    video.addEventListener("playing", function () {
+        if (isLive) {
+            hideOverlay();
+            liveBadge.classList.add("show");
+        }
+        btnPlayPause.textContent = "⏸";
+    });
+    video.addEventListener("pause", function () { btnPlayPause.textContent = "▶"; });
+    video.addEventListener("error", function () {
+        if (video.getAttribute("src")) showError("Video error — refresh karke try karo.");
+    });
+
+    // ─────────── Custom controls ───────────
+    btnPlayPause.addEventListener("click", function () {
+        if (video.paused) video.play(); else video.pause();
+    });
+
+    btnMute.addEventListener("click", function () {
+        video.muted = !video.muted;
+        btnMute.textContent = video.muted ? "🔇" : "🔊";
+    });
+
+    btnFullscreen.addEventListener("click", function () {
+        if (document.fullscreenElement) {
+            document.exitFullscreen();
+        } else if (shell.requestFullscreen) {
+            shell.requestFullscreen();
+        } else if (video.webkitEnterFullscreen) {
+            video.webkitEnterFullscreen(); // iOS Safari
+        }
+    });
+
+    // Go Live — live edge pe jump
+    function updateGoLiveState() {
+        if (!isLive) return;
+        var atLive = false;
+        if (hls && hls.liveSyncPosition) {
+            atLive = Math.abs(video.currentTime - hls.liveSyncPosition) < 8;
+        }
+        btnGoLive.classList.toggle("at-live", atLive);
+    }
+    btnGoLive.addEventListener("click", function () {
+        if (!isLive) return;
+        var edge = null;
+        if (hls && hls.liveSyncPosition) edge = hls.liveSyncPosition;
+        else if (video.seekable.length) edge = video.seekable.end(video.seekable.length - 1);
+        if (edge != null) {
+            video.currentTime = edge;
+            video.play().catch(function () {});
+        }
+    });
+
+    // Progress bar (recorded mode mein seek, live mode mein buffer position)
+    setInterval(function () {
+        try {
+            if (isLive) {
+                if (video.seekable.length) {
+                    var end = video.seekable.end(video.seekable.length - 1);
+                    var start = video.seekable.start(0);
+                    var pct = end > start ? ((video.currentTime - start) / (end - start)) * 100 : 0;
+                    progressBar.style.width = Math.min(100, Math.max(0, pct)) + "%";
+                }
+                timeLabel.textContent = "🔴 LIVE";
+                updateGoLiveState();
+            } else if (video.duration) {
+                progressBar.style.width = (video.currentTime / video.duration) * 100 + "%";
+                timeLabel.textContent = fmt(video.currentTime) + " / " + fmt(video.duration);
+            }
+        } catch (e) {}
+    }, 500);
+
+    function fmt(s) {
+        s = Math.floor(s || 0);
+        var h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+        return (h ? h + ":" : "") + String(m).padStart(2, "0") + ":" + String(sec).padStart(2, "0");
+    }
+
+    progressWrap.addEventListener("click", function (e) {
+        if (isLive) return; // live mein seek mat karo — Go Live use karo
+        if (!video.duration) return;
+        var rect = progressWrap.getBoundingClientRect();
+        video.currentTime = ((e.clientX - rect.left) / rect.width) * video.duration;
+    });
+
+    // ─────────── Boot ───────────
+    if (INITIAL_STATUS === "READY") {
+        // Pehle se recorded hai — seedha 2 options dikhao
+        fetch("/api/status/" + encodeURIComponent(NAME))
+            .then(function (r) { return r.json(); })
+            .then(function (st) { if (st.status === "READY") showEnded(st); else startLive(); })
+            .catch(function () { startLive(); });
+    } else {
+        startLive();
+    }
+})();
+</script>
+</body>
+</html>
