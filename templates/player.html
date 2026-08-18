@@ -311,14 +311,27 @@ footer { text-align:center; color:var(--muted); font-size:11.5px; padding:14px; 
 
             hls.on(Hls.Events.ERROR, function (_, data) {
                 if (!data.fatal) return;
+
                 if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+                    // Use hls.js's own error "details" (matches the reference
+                    // proxy's logic) instead of guessing — this is precise:
+                    // manifestLoadError/manifestLoadTimeOut/manifestParsingError
+                    // mean the playlist itself never came up even once (dead
+                    // link, proxy 502, upstream down) — no point silently
+                    // retrying forever, show a clear error immediately.
+                    var neverStarted =
+                        data.details === "manifestLoadError" ||
+                        data.details === "manifestLoadTimeOut" ||
+                        data.details === "manifestParsingError";
+
+                    if (!manifestEverLoaded && neverStarted) {
+                        showError("Stream load nahi ho paya — link expire ho gaya ya server down hai. Thodi der baad refresh karo.");
+                        return;
+                    }
                     if (!manifestEverLoaded) {
-                        // Stream never actually started even once — the previous
-                        // version blindly called hls.startLoad() here on every
-                        // fatal error, which reset hls.js's own retry counter
-                        // and looped forever with the spinner stuck forever and
-                        // NO error ever shown. Now: let it stay stopped and let
-                        // the watchdog above surface a clear error instead.
+                        // Some other network error before first successful
+                        // load — let hls.js's own retry policy handle it,
+                        // don't manually reset the retry cycle.
                         return;
                     }
                     // Playback had already started once — a network error here
@@ -360,6 +373,12 @@ footer { text-align:center; color:var(--muted); font-size:11.5px; padding:14px; 
     video.addEventListener("pause", function () { btnPlayPause.textContent = "▶"; });
     video.addEventListener("error", function () {
         if (video.getAttribute("src")) showError("Video error — refresh karke try karo.");
+    });
+
+    // Live class ki speed hamesha 1x — kisi bhi tarah (native context menu,
+    // keyboard shortcut, etc.) se change ho jaaye to turant wapas 1x kar do.
+    video.addEventListener("ratechange", function () {
+        if (isLive && video.playbackRate !== 1) video.playbackRate = 1;
     });
 
     // ─────────── Custom controls ───────────
