@@ -152,7 +152,7 @@ footer { text-align:center; color:var(--muted); font-size:11.5px; padding:14px; 
             <div class="msg" id="overlayMsg">Live class load ho rahi hai…</div>
             <div id="endedBox" style="display:none; flex-direction:column; align-items:center; gap:10px;">
                 <div class="ended-title">📺 Class Recorded</div>
-                <div class="ended-sub">Live khatam ho gayi — ab aap recording dekh ya download kar sakte ho.</div>
+                <div class="ended-sub" id="endedSub">Live khatam ho gayi — ab aap recording dekh ya download kar sakte ho.</div>
                 <div class="action-row">
                     <button class="big-btn watch" id="btnWatch">▶ Watch Online</button>
                     <a class="big-btn download" id="btnDownload" href="#" target="_blank" rel="noopener">⬇ Download Now</a>
@@ -177,6 +177,7 @@ footer { text-align:center; color:var(--muted); font-size:11.5px; padding:14px; 
     var overlayMsg = document.getElementById("overlayMsg");
     var spinner = document.getElementById("spinner");
     var endedBox = document.getElementById("endedBox");
+    var endedSub = document.getElementById("endedSub");
     var btnWatch = document.getElementById("btnWatch");
     var btnDownload = document.getElementById("btnDownload");
     var liveBadge = document.getElementById("liveBadge");
@@ -235,7 +236,20 @@ footer { text-align:center; color:var(--muted); font-size:11.5px; padding:14px; 
         spinner.style.display = "none";
         overlayMsg.style.display = "none";
         endedBox.style.display = "flex";
-        btnDownload.href = st.download_url;
+
+        // Download button sirf tab dikhao jab Telegram upload actually
+        // succeed hua ho — pehle ye hamesha dikhta tha (chahe upload fail
+        // ho jaaye) aur tap karne pe bot "processing" bolta rehta tha,
+        // jo student ke liye ek broken/dead button jaisa feel hota tha.
+        if (st.download_url) {
+            btnDownload.style.display = "";
+            btnDownload.href = st.download_url;
+            endedSub.textContent = "Live khatam ho gayi — ab aap recording dekh ya download kar sakte ho.";
+        } else {
+            btnDownload.style.display = "none";
+            endedSub.textContent = "Live khatam ho gayi — Watch Online available hai. Download thodi der me ready hoga.";
+        }
+
         btnWatch.onclick = function () {
             // Watch Online — same player, recorded mp4
             overlay.classList.add("hidden");
@@ -256,7 +270,7 @@ footer { text-align:center; color:var(--muted); font-size:11.5px; padding:14px; 
             fetch("/api/status/" + encodeURIComponent(NAME))
                 .then(function (r) { return r.json(); })
                 .then(function (st) {
-                    if (st.status === "READY") {
+                    if (st.status === "READY" || st.status === "UPLOAD_FAILED") {
                         clearInterval(statusPoller);
                         statusPoller = null;
                         if (hls) { hls.destroy(); hls = null; }
@@ -454,11 +468,14 @@ footer { text-align:center; color:var(--muted); font-size:11.5px; padding:14px; 
     });
 
     // ─────────── Boot ───────────
-    if (INITIAL_STATUS === "READY") {
-        // Pehle se recorded hai — seedha 2 options dikhao
+    if (INITIAL_STATUS === "READY" || INITIAL_STATUS === "UPLOAD_FAILED") {
+        // Pehle se recorded hai — seedha options dikhao
         fetch("/api/status/" + encodeURIComponent(NAME))
             .then(function (r) { return r.json(); })
-            .then(function (st) { if (st.status === "READY") showEnded(st); else startLive(); })
+            .then(function (st) {
+                if (st.status === "READY" || st.status === "UPLOAD_FAILED") showEnded(st);
+                else startLive();
+            })
             .catch(function () { startLive(); });
     } else {
         startLive();
