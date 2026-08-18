@@ -28,10 +28,10 @@
         <button class="copy-btn copy-red" data-copy="{{ public_link }}">Copy</button>
       </div>
 
-      <p class="qcount">Ready to share & play ✅ (Current status: <span id="statusText">{{ status }}</span>)</p>
+      <p class="qcount">Ready to share & play ✅ (Current status: {{ status }})</p>
+      <p class="qcount" style="opacity:.75;">Live end hote hi video khud-ba-khud download ho ke Telegram bot par save ho jaayega — kuch karne ki zaroorat nahi.</p>
 
-      <button id="recordBtn" class="btn btn-red" data-name="{{ name }}">⏺ START RECORDING</button>
-      <button id="retryUploadBtn" class="btn btn-red" data-name="{{ name }}" style="display:none;">⬆ RETRY TELEGRAM UPLOAD</button>
+      <button id="recordBtn" class="btn btn-red" data-name="{{ name }}">⚡ FORCE CHECK NOW</button>
       <a href="{{ url_for('index') }}" class="btn btn-blue">GENERATE ANOTHER</a>
     </div>
   </div>

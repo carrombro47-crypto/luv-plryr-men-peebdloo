@@ -87,11 +87,13 @@ main { flex:1; display:flex; flex-direction:column; align-items:center; padding:
 /* ── Custom control bar ── */
 .controls {
     position:absolute; left:0; right:0; bottom:0; z-index:15;
-    display:flex; align-items:center; gap:10px; padding:10px 14px;
+    display:flex; flex-direction:column; gap:8px; padding:10px 14px;
     background:linear-gradient(transparent, rgba(0,0,0,.75));
     opacity:0; transition:opacity .25s;
 }
 .shell:hover .controls, .controls.force-show { opacity:1; }
+.controls-top { display:flex; justify-content:flex-end; }
+.controls-bottom { display:flex; align-items:center; gap:10px; }
 .cbtn {
     background:rgba(255,255,255,.12); border:1px solid rgba(255,255,255,.2);
     color:#fff; border-radius:8px; width:38px; height:38px; cursor:pointer;
@@ -103,14 +105,16 @@ main { flex:1; display:flex; flex-direction:column; align-items:center; padding:
 .progress-bar { height:100%; background:linear-gradient(90deg, var(--accent), var(--accent2)); border-radius:99px; width:0%; }
 .time-label { font-size:11.5px; color:#d1d5db; min-width:70px; text-align:center; flex-shrink:0; }
 .go-live {
-    margin-left:auto; padding:0 14px; height:38px; border:none; border-radius:8px;
-    background:rgba(255,45,45,.9); color:#fff; font-size:12px; font-weight:700;
-    letter-spacing:.5px; cursor:pointer; display:flex; align-items:center; gap:6px;
+    padding:0 14px; height:30px; border:none; border-radius:999px;
+    background:rgba(255,45,45,.92); color:#fff; font-size:11px; font-weight:700;
+    letter-spacing:1px; cursor:pointer; display:flex; align-items:center; gap:6px;
     flex-shrink:0; transition:background .2s, box-shadow .2s;
+    box-shadow:0 4px 14px rgba(255,45,45,.4);
 }
 .go-live:hover { background:#ff2d2d; }
-.go-live.at-live { background:rgba(255,255,255,.14); cursor:default; box-shadow:none; }
-.go-live .gdot { width:7px; height:7px; border-radius:50%; background:#fff; }
+.go-live.at-live { background:rgba(255,255,255,.16); box-shadow:none; }
+.go-live .gdot { width:7px; height:7px; border-radius:50%; background:#fff; animation:blink 1s infinite; }
+.go-live.at-live .gdot { animation:none; }
 
 footer { text-align:center; color:var(--muted); font-size:11.5px; padding:14px; }
 </style>
@@ -131,19 +135,24 @@ footer { text-align:center; color:var(--muted); font-size:11.5px; padding:14px; 
 </header>
 
 <main>
-    <div class="class-title" id="classTitle">{{ name }}</div>
+    <div class="class-title" id="classTitle">{{ title }}</div>
 
     <div class="shell" id="shell">
         <video id="video" playsinline></video>
 
         <!-- Custom controls -->
         <div class="controls" id="controls">
-            <button class="cbtn" id="btnPlayPause" title="Play/Pause">▶</button>
-            <button class="cbtn" id="btnMute" title="Mute/Unmute">🔊</button>
-            <div class="progress-wrap" id="progressWrap"><div class="progress-bar" id="progressBar"></div></div>
-            <span class="time-label" id="timeLabel">LIVE</span>
-            <button class="go-live" id="btnGoLive"><span class="gdot"></span>Go Live</button>
-            <button class="cbtn" id="btnFullscreen" title="Fullscreen">⛶</button>
+            <div class="controls-top">
+                <button class="go-live" id="btnGoLive"><span class="gdot"></span>LIVE</button>
+            </div>
+            <div class="controls-bottom">
+                <button class="cbtn vod-only" id="btnSkipBack" title="-10s" style="display:none;">⏪</button>
+                <div class="progress-wrap" id="progressWrap"><div class="progress-bar" id="progressBar"></div></div>
+                <button class="cbtn vod-only" id="btnSkipFwd" title="+10s" style="display:none;">⏩</button>
+                <span class="time-label vod-only" id="timeLabel" style="display:none;"></span>
+                <button class="cbtn vod-only" id="btnSpeed" title="Playback speed" style="display:none; width:auto; padding:0 10px;">1x</button>
+                <button class="cbtn" id="btnFullscreen" title="Fullscreen">⛶</button>
+            </div>
         </div>
 
         <!-- Overlay -->
@@ -152,7 +161,7 @@ footer { text-align:center; color:var(--muted); font-size:11.5px; padding:14px; 
             <div class="msg" id="overlayMsg">Live class load ho rahi hai…</div>
             <div id="endedBox" style="display:none; flex-direction:column; align-items:center; gap:10px;">
                 <div class="ended-title">📺 Class Recorded</div>
-                <div class="ended-sub" id="endedSub">Live khatam ho gayi — ab aap recording dekh ya download kar sakte ho.</div>
+                <div class="ended-sub">Live khatam ho gayi — ab aap recording dekh ya download kar sakte ho.</div>
                 <div class="action-row">
                     <button class="big-btn watch" id="btnWatch">▶ Watch Online</button>
                     <a class="big-btn download" id="btnDownload" href="#" target="_blank" rel="noopener">⬇ Download Now</a>
@@ -177,15 +186,15 @@ footer { text-align:center; color:var(--muted); font-size:11.5px; padding:14px; 
     var overlayMsg = document.getElementById("overlayMsg");
     var spinner = document.getElementById("spinner");
     var endedBox = document.getElementById("endedBox");
-    var endedSub = document.getElementById("endedSub");
     var btnWatch = document.getElementById("btnWatch");
     var btnDownload = document.getElementById("btnDownload");
     var liveBadge = document.getElementById("liveBadge");
     var controls = document.getElementById("controls");
-    var btnPlayPause = document.getElementById("btnPlayPause");
-    var btnMute = document.getElementById("btnMute");
     var btnFullscreen = document.getElementById("btnFullscreen");
     var btnGoLive = document.getElementById("btnGoLive");
+    var btnSkipBack = document.getElementById("btnSkipBack");
+    var btnSkipFwd = document.getElementById("btnSkipFwd");
+    var btnSpeed = document.getElementById("btnSpeed");
     var progressBar = document.getElementById("progressBar");
     var progressWrap = document.getElementById("progressWrap");
     var timeLabel = document.getElementById("timeLabel");
@@ -236,32 +245,44 @@ footer { text-align:center; color:var(--muted); font-size:11.5px; padding:14px; 
         spinner.style.display = "none";
         overlayMsg.style.display = "none";
         endedBox.style.display = "flex";
-
-        // Download button sirf tab dikhao jab Telegram upload actually
-        // succeed hua ho — pehle ye hamesha dikhta tha (chahe upload fail
-        // ho jaaye) aur tap karne pe bot "processing" bolta rehta tha,
-        // jo student ke liye ek broken/dead button jaisa feel hota tha.
-        if (st.download_url) {
-            btnDownload.style.display = "";
-            btnDownload.href = st.download_url;
-            endedSub.textContent = "Live khatam ho gayi — ab aap recording dekh ya download kar sakte ho.";
-        } else {
-            btnDownload.style.display = "none";
-            endedSub.textContent = "Live khatam ho gayi — Watch Online available hai. Download thodi der me ready hoga.";
-        }
-
+        btnDownload.href = st.download_url;
         btnWatch.onclick = function () {
-            // Watch Online — same player, recorded mp4
+            // Watch Online — same player, recorded mp4 (seek/speed/skip enabled)
             overlay.classList.add("hidden");
             liveBadge.classList.remove("show");
             isLive = false;
             btnGoLive.style.display = "none";
+            document.querySelectorAll(".vod-only").forEach(function (el) {
+                el.style.display = "";
+            });
             if (hls) { hls.destroy(); hls = null; }
             video.src = st.watch_url;
             video.muted = false;
+            video.playbackRate = 1;
+            btnSpeed.textContent = "1x";
             video.play().catch(function () {});
         };
     }
+
+    // ─────────── Speed control (VOD only) ───────────
+    var SPEEDS = [0.5, 1, 1.25, 1.5, 2];
+    btnSpeed.addEventListener("click", function () {
+        if (isLive) return;
+        var idx = SPEEDS.indexOf(video.playbackRate);
+        var next = SPEEDS[(idx + 1 + SPEEDS.length) % SPEEDS.length] || 1;
+        video.playbackRate = next;
+        btnSpeed.textContent = next + "x";
+    });
+
+    // ─────────── Skip ±10s (VOD only) ───────────
+    btnSkipBack.addEventListener("click", function () {
+        if (isLive || !video.duration) return;
+        video.currentTime = Math.max(0, video.currentTime - 10);
+    });
+    btnSkipFwd.addEventListener("click", function () {
+        if (isLive || !video.duration) return;
+        video.currentTime = Math.min(video.duration, video.currentTime + 10);
+    });
 
     // ─────────── Status polling (live end detection) ───────────
     function startStatusPolling() {
@@ -270,7 +291,7 @@ footer { text-align:center; color:var(--muted); font-size:11.5px; padding:14px; 
             fetch("/api/status/" + encodeURIComponent(NAME))
                 .then(function (r) { return r.json(); })
                 .then(function (st) {
-                    if (st.status === "READY" || st.status === "UPLOAD_FAILED") {
+                    if (st.status === "READY") {
                         clearInterval(statusPoller);
                         statusPoller = null;
                         if (hls) { hls.destroy(); hls = null; }
@@ -382,9 +403,7 @@ footer { text-align:center; color:var(--muted); font-size:11.5px; padding:14px; 
             hideOverlay();
             liveBadge.classList.add("show");
         }
-        btnPlayPause.textContent = "⏸";
     });
-    video.addEventListener("pause", function () { btnPlayPause.textContent = "▶"; });
     video.addEventListener("error", function () {
         if (video.getAttribute("src")) showError("Video error — refresh karke try karo.");
     });
@@ -395,16 +414,15 @@ footer { text-align:center; color:var(--muted); font-size:11.5px; padding:14px; 
         if (isLive && video.playbackRate !== 1) video.playbackRate = 1;
     });
 
+    // ─────────── Tap-to-play/pause (video par seedha tap — professional
+    // style, koi persistent pause button nahi) ───────────
+    video.addEventListener("click", function () {
+        video.muted = false; // pehle tap par hi unmute (agar autoplay policy ki wajah se mute tha)
+        if (video.paused) video.play().catch(function () {});
+        else video.pause();
+    });
+
     // ─────────── Custom controls ───────────
-    btnPlayPause.addEventListener("click", function () {
-        if (video.paused) video.play(); else video.pause();
-    });
-
-    btnMute.addEventListener("click", function () {
-        video.muted = !video.muted;
-        btnMute.textContent = video.muted ? "🔇" : "🔊";
-    });
-
     btnFullscreen.addEventListener("click", function () {
         if (document.fullscreenElement) {
             document.exitFullscreen();
@@ -445,7 +463,6 @@ footer { text-align:center; color:var(--muted); font-size:11.5px; padding:14px; 
                     var pct = end > start ? ((video.currentTime - start) / (end - start)) * 100 : 0;
                     progressBar.style.width = Math.min(100, Math.max(0, pct)) + "%";
                 }
-                timeLabel.textContent = "🔴 LIVE";
                 updateGoLiveState();
             } else if (video.duration) {
                 progressBar.style.width = (video.currentTime / video.duration) * 100 + "%";
@@ -468,14 +485,11 @@ footer { text-align:center; color:var(--muted); font-size:11.5px; padding:14px; 
     });
 
     // ─────────── Boot ───────────
-    if (INITIAL_STATUS === "READY" || INITIAL_STATUS === "UPLOAD_FAILED") {
-        // Pehle se recorded hai — seedha options dikhao
+    if (INITIAL_STATUS === "READY") {
+        // Pehle se recorded hai — seedha 2 options dikhao
         fetch("/api/status/" + encodeURIComponent(NAME))
             .then(function (r) { return r.json(); })
-            .then(function (st) {
-                if (st.status === "READY" || st.status === "UPLOAD_FAILED") showEnded(st);
-                else startLive();
-            })
+            .then(function (st) { if (st.status === "READY") showEnded(st); else startLive(); })
             .catch(function () { startLive(); });
     } else {
         startLive();
