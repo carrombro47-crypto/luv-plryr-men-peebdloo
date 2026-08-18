@@ -19,7 +19,7 @@ from recorder import start_recording
 # Public domain used in every generated link. ONLY line to edit if this
 # service's Render domain ever changes.
 PUBLIC_BASE_URL = os.environ.get(
-    "PUBLIC_BASE_URL", "https://pw-live-system.onrender.com"
+    "PUBLIC_BASE_URL", "https://pw-live-proxy.onrender.com"
 )
 
 # ─── Server-side Admin Auth (keys never reach the browser) ────────────────
