@@ -253,7 +253,7 @@ def _make_480p(raw_path: str, out_path: str) -> bool:
 
 def _caption_for(title: str) -> str:
     clean = display_title(title)
-    return f"📝 Titel: {clean}\n\n📥 Upload By♠: @SmartBoy_ApnaMS"
+    return f"📝 Titel: {clean}\n\n📥 Upload By♠: @PW_SENSEI"
 
 
 def _upload_to_telegram(path: str, title: str, duration):
