@@ -1,13 +1,15 @@
-# PW Live Proxy (Fixed v2.0)
+# PW Live Proxy (Fixed v2.1)
 
-## Kya fix hua
+## v2.1 mein kya fix hua (fragLoadError / 403 / blank screen)
+- ROOT CAUSE: CloudFront signed URL mein segments (index_6_xxx.ts) mein Signature/Policy/Key-Pair-Id nahi hota
+  → CloudFront har segment pe 403 deta tha → hls.js fragLoadError → video nahi chalta tha
+- FIX: Proxy ab playlist URL ke auth params ko same-host segments pe auto-inherit karta hai
+- Content-Type case-insensitive check (application/x-mpegURL bhi match hota hai)
 - CORS: har response pe headers + OPTIONS preflight + vercel.json global headers
-- Error responses (400/500/403) bhi ab CORS ke saath — browser block nahi karega
-- Playlist mein absolute proxy URLs (same-origin alag domain se bhi chalega)
-- Upstream timeout (15s) + auto-retry, Range header passthrough
-- index.html: professional UI, URL input, quality selector, stats, retry, debug logs
+- Absolute proxy URLs (page kisi bhi domain se kholo)
+- Upstream timeout (15s) + retry, Range passthrough
 
 ## Deploy
 - Vercel: repo push karo — api/stream.js auto serverless banega
-- Render/VPS: `npm install && npm start`
-- Browser mein kholo → stream URL paste karo → Play
+- Render/VPS: npm install && npm start
+- IMPORTANT: Render pe purana deploy replace karo (purge/redeploy), warna purana code hi chalega

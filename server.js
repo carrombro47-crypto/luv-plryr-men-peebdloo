@@ -1,9 +1,10 @@
 // ============================================================
 //  PW Live Proxy — Express Server (Render / VPS / local)
+//  v2.1 — fragLoadError / CORS / 403 fixes:
 //  - Global CORS middleware (preflight + success + errors)
-//  - Absolute proxy URLs in rewritten playlists
-//  - Upstream timeout + retry, Range passthrough
-//  - index.html static serve
+//  - Content-Type case-insensitive m3u8 detection
+//  - Signed URL auth params playlist se segments pe inherit
+//  - Absolute proxy URLs, timeout + retry, Range passthrough
 // ============================================================
 
 import express from "express";
@@ -29,8 +30,17 @@ const UPSTREAM_HEADERS = {
 const TIMEOUT_MS = 15000;
 const MAX_RETRIES = 2;
 
+// CloudFront signed URL ke ye params har request pe chahiye hote hain
+const AUTH_PARAMS = [
+  "signature",
+  "policy",
+  "key-pair-id",
+  "expires",
+  "start",
+  "session-id",
+];
+
 // ---------- GLOBAL CORS MIDDLEWARE (sabse pehle) ----------
-// Har response pe — success ho ya error — CORS headers jaayenge.
 app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
@@ -38,12 +48,12 @@ app.use((req, res, next) => {
   res.setHeader("Access-Control-Expose-Headers", "*");
   res.setHeader("Access-Control-Max-Age", "86400");
   if (req.method === "OPTIONS") {
-    return res.status(204).end(); // preflight yahin handle
+    return res.status(204).end();
   }
   next();
 });
 
-// ---------- Static files (index.html) ----------
+// ---------- Static files ----------
 app.use(express.static(__dirname));
 
 app.get("/", (req, res) => {
@@ -91,6 +101,32 @@ function proxyBase(req) {
   return `${proto}://${host}`;
 }
 
+// ---- Segment URL mein auth params inherit karo ----
+function inheritAuthParams(absoluteUrl, playlistUrl) {
+  try {
+    const seg = new URL(absoluteUrl);
+    const pl = new URL(playlistUrl);
+
+    if (seg.host !== pl.host) return absoluteUrl;
+
+    let changed = false;
+    // URLSearchParams case-sensitive hai — lowercase compare karo
+    const segKeysLower = new Set(
+      [...seg.searchParams.keys()].map((k) => k.toLowerCase())
+    );
+    for (const [key, val] of pl.searchParams.entries()) {
+      const lower = key.toLowerCase();
+      if (AUTH_PARAMS.includes(lower) && !segKeysLower.has(lower)) {
+        seg.searchParams.set(key, val);
+        changed = true;
+      }
+    }
+    return changed ? seg.href : absoluteUrl;
+  } catch {
+    return absoluteUrl;
+  }
+}
+
 // ---------- Main proxy route ----------
 app.get("/api/stream", async (req, res) => {
   const targetUrl = req.query.url;
@@ -121,7 +157,8 @@ app.get("/api/stream", async (req, res) => {
         .json({ error: `Upstream failed: ${response.status}` });
     }
 
-    const contentType = response.headers.get("content-type") || "";
+    // ---- CASE-INSENSITIVE content-type check ----
+    const contentType = (response.headers.get("content-type") || "").toLowerCase();
 
     const isM3U8 =
       contentType.includes("mpegurl") ||
@@ -136,9 +173,13 @@ app.get("/api/stream", async (req, res) => {
 
       const makeProxyUrl = (rawUrl) => {
         try {
-          const absolute = /^https?:\/\//i.test(rawUrl)
+          let absolute = /^https?:\/\//i.test(rawUrl)
             ? rawUrl
             : new URL(rawUrl, baseUrl).href;
+
+          // ---- signed URL auth params inherit ----
+          absolute = inheritAuthParams(absolute, targetUrl);
+
           return `${base}/api/stream?url=${encodeURIComponent(absolute)}`;
         } catch {
           return rawUrl;
@@ -189,5 +230,5 @@ app.get("/api/stream", async (req, res) => {
 });
 
 app.listen(PORT, "0.0.0.0", () => {
-  console.log(`✅ PW Live Proxy running on port ${PORT}`);
+  console.log(`✅ PW Live Proxy v2.1 running on port ${PORT}`);
 });
