@@ -33,6 +33,19 @@ CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 _active = {}          # name -> threading.Thread
 _active_lock = threading.Lock()
 
+# Same header set as main.py's UPSTREAM_HEADERS. Pehle ffmpeg ko sirf
+# "Referer" + generic "User-Agent: Mozilla/5.0" milta tha — kaafi CDN edge
+# nodes isko non-browser request maan ke 403 de dete the, isliye recording
+# silently fail ho jaati thi aur READY status / download link kabhi nahi
+# aata tha. Ab woh hi full Chrome-jaisa header set use hota hai jo live
+# playback ke liye already kaam kar raha hai.
+FFMPEG_HEADERS = (
+    "Referer: https://www.pw.live/\r\n"
+    "Origin: https://www.pw.live\r\n"
+    "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36\r\n"
+)
+
 
 def _set(col, name, **fields):
     col.update_one({"_id": name}, {"$set": fields})
@@ -102,7 +115,13 @@ def _pipeline(name: str, original_url: str, col):
         _set(col, name, status="RECORDING")
         ok = _run_ffmpeg([
             "-y",
-            "-headers", "Referer: https://www.pw.live/\r\nUser-Agent: Mozilla/5.0\r\n",
+            "-headers", FFMPEG_HEADERS,
+            # Live HLS lambi der chalti hai — beech me ek chhoti network
+            # hiccup pehle poori recording ko abort kar deti thi. Ab ffmpeg
+            # khud reconnect karke recording jaari rakhega.
+            "-reconnect", "1",
+            "-reconnect_streamed", "1",
+            "-reconnect_delay_max", "5",
             "-i", original_url,
             "-c", "copy",
             "-movflags", "+faststart",

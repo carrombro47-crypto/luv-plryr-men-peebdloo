@@ -1,6 +1,7 @@
 import base64
 import os
 import re
+import time
 import unicodedata
 import functools
 from datetime import datetime, timedelta
@@ -61,10 +62,16 @@ UPSTREAM_HEADERS = {
     "Accept-Language": "en-US,en;q=0.9",
     "Referer": "https://www.pw.live/",
     "Origin": "https://www.pw.live",
+    # sec-ch-ua / client-hints — kuch CDN edge nodes bina in headers ke bhi
+    # requests ko "non-browser" maan ke drop/slow kar dete hain.
+    "sec-ch-ua": '"Chromium";v="126", "Not_A Brand";v="8"',
+    "sec-ch-ua-mobile": "?0",
+    "sec-ch-ua-platform": '"Windows"',
 }
 
 AUTH_PARAMS = {"signature", "policy", "key-pair-id", "expires", "start", "session-id"}
 UPSTREAM_TIMEOUT = 15
+UPSTREAM_MAX_RETRIES = 2  # transient CDN edge hiccups ke liye
 
 
 @flask_app.after_request
@@ -134,12 +141,37 @@ def _rewrite_m3u8(body: str, playlist_url: str, name: str) -> str:
 
 
 def _fetch_upstream(url: str):
+    """
+    Upstream fetch with retry + backoff — ported from the reference
+    stream.js proxy logic:
+      - 2xx aur 4xx dono FINAL maane jaate hain (4xx retry karne se theek
+        nahi hoga — e.g. expired signed URL — retry sirf time waste karta
+        hai aur player ko zyada der "loading" pe atka deta hai).
+      - Sirf 5xx / connection-level errors (timeout, DNS, reset — transient
+        CDN edge hiccups) retry hote hain, chhoti backoff ke saath.
+    Pehle sirf EK attempt tha (koi retry nahi) — isliye ek chhota transient
+    upstream glitch turant hi player ko fatal error de deta tha, jo live
+    stream ke case me bahut common hai. Ye hi "live nahi chal raha" ke
+    symptoms ka ek bada part tha.
+    """
     headers = dict(UPSTREAM_HEADERS)
     if request.headers.get("Range"):
         headers["Range"] = request.headers["Range"]
-    return requests.get(
-        url, headers=headers, timeout=UPSTREAM_TIMEOUT, allow_redirects=True
-    )
+
+    last_exc = None
+    for attempt in range(UPSTREAM_MAX_RETRIES + 1):
+        try:
+            r = requests.get(
+                url, headers=headers, timeout=UPSTREAM_TIMEOUT, allow_redirects=True
+            )
+            if r.ok or (400 <= r.status_code < 500):
+                return r  # final — 2xx ya 4xx, retry se koi fayda nahi
+            last_exc = requests.RequestException(f"Upstream {r.status_code}")
+        except requests.RequestException as e:
+            last_exc = e
+        if attempt < UPSTREAM_MAX_RETRIES:
+            time.sleep(0.3 * (attempt + 1))
+    raise last_exc
 
 
 @flask_app.route("/api/live/<name>/playlist")
