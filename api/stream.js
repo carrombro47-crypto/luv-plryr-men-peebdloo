@@ -1,9 +1,11 @@
 // ============================================================
 //  PW Live Proxy — Vercel Serverless Function (api/stream.js)
+//  v2.1 — fragLoadError / CORS / 403 fixes:
+//  - Content-Type case-insensitive m3u8 detection
+//  - Signed URL auth params (Signature/Policy/Key-Pair-Id)
+//    playlist se segments pe auto-inherit hote hain
 //  - Full CORS (preflight + success + errors)
-//  - Absolute proxy URLs in rewritten playlists
-//  - Upstream timeout + retry
-//  - Range header passthrough
+//  - Absolute proxy URLs, timeout + retry, Range passthrough
 // ============================================================
 
 const UPSTREAM_HEADERS = {
@@ -20,6 +22,16 @@ const UPSTREAM_HEADERS = {
 
 const TIMEOUT_MS = 15000;
 const MAX_RETRIES = 2;
+
+// CloudFront signed URL ke ye params har request pe chahiye hote hain
+const AUTH_PARAMS = [
+  "signature",
+  "policy",
+  "key-pair-id",
+  "expires",
+  "start",
+  "session-id",
+];
 
 // ---- CORS: har response (success/error) pe lagao ----
 function applyCors(res) {
@@ -58,16 +70,44 @@ async function fetchUpstream(url, extraHeaders = {}) {
         redirect: "follow",
       });
       if (response.ok || (response.status >= 400 && response.status < 500)) {
-        return response; // 4xx final hai, retry ka matlab nahi
+        return response; // 4xx final hai
       }
       lastError = new Error(`Upstream ${response.status}`);
     } catch (err) {
       lastError = err;
     }
-    // Thoda wait karke retry
     await new Promise((r) => setTimeout(r, 300 * (attempt + 1)));
   }
   throw lastError || new Error("Upstream fetch failed");
+}
+
+// ---- Segment URL mein auth params inherit karo ----
+// Playlist URL mein Signature/Policy/Key-Pair-Id hote hain,
+// par relative segment URLs mein nahi → CloudFront 403 deta hai.
+function inheritAuthParams(absoluteUrl, playlistUrl) {
+  try {
+    const seg = new URL(absoluteUrl);
+    const pl = new URL(playlistUrl);
+
+    // Sirf same host pe inherit karo (security + zaroorat)
+    if (seg.host !== pl.host) return absoluteUrl;
+
+    let changed = false;
+    // URLSearchParams case-sensitive hai — lowercase compare karo
+    const segKeysLower = new Set(
+      [...seg.searchParams.keys()].map((k) => k.toLowerCase())
+    );
+    for (const [key, val] of pl.searchParams.entries()) {
+      const lower = key.toLowerCase();
+      if (AUTH_PARAMS.includes(lower) && !segKeysLower.has(lower)) {
+        seg.searchParams.set(key, val);
+        changed = true;
+      }
+    }
+    return changed ? seg.href : absoluteUrl;
+  } catch {
+    return absoluteUrl;
+  }
 }
 
 export default async function handler(req, res) {
@@ -89,7 +129,6 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: "Missing url parameter" });
   }
 
-  // URL validate karo
   let parsed;
   try {
     parsed = new URL(targetUrl);
@@ -101,7 +140,7 @@ export default async function handler(req, res) {
   }
 
   try {
-    // Range header passthrough (seek ke liye zaroori)
+    // Range header passthrough
     const extraHeaders = {};
     if (req.headers.range) extraHeaders["Range"] = req.headers.range;
 
@@ -113,7 +152,8 @@ export default async function handler(req, res) {
         .json({ error: `Upstream failed: ${response.status}` });
     }
 
-    const contentType = response.headers.get("content-type") || "";
+    // ---- CASE-INSENSITIVE content-type check (fix #1) ----
+    const contentType = (response.headers.get("content-type") || "").toLowerCase();
 
     const isM3U8 =
       contentType.includes("mpegurl") ||
@@ -126,7 +166,6 @@ export default async function handler(req, res) {
       res.setHeader("Content-Type", contentType || "video/mp2t");
       res.setHeader("Content-Length", buffer.length);
       res.setHeader("Cache-Control", "public, max-age=30");
-      // Range response headers forward karo
       const cr = response.headers.get("content-range");
       if (cr) res.setHeader("Content-Range", cr);
       res.setHeader("Accept-Ranges", "bytes");
@@ -140,9 +179,13 @@ export default async function handler(req, res) {
 
     const makeProxyUrl = (rawUrl) => {
       try {
-        const absolute = /^https?:\/\//i.test(rawUrl)
+        let absolute = /^https?:\/\//i.test(rawUrl)
           ? rawUrl
           : new URL(rawUrl, baseUrl).href;
+
+        // ---- fix #2: signed URL auth params inherit ----
+        absolute = inheritAuthParams(absolute, targetUrl);
+
         // ABSOLUTE proxy URL — kahin se bhi page kholo, kaam karega
         return `${base}/api/stream?url=${encodeURIComponent(absolute)}`;
       } catch {
