@@ -14,7 +14,7 @@ from flask import (
 )
 
 from utils.db import get_db
-from recorder import start_recording
+from recorder import start_recording, retry_upload
 
 # ─── Configuration ──────────────────────────────────────────────────────────
 # Public domain used in every generated link. ONLY line to edit if this
@@ -360,6 +360,26 @@ def api_record(name):
     return jsonify({"ok": True, "status": "RECORDING"})
 
 
+@flask_app.route("/api/retry-upload/<name>", methods=["POST"])
+@admin_required
+def api_retry_upload(name):
+    """
+    Recording/480p file already disk pe ban chuka hai lekin Telegram upload
+    fail ho gaya tha (env vars missing the, file size limit se bada tha,
+    ya transient network error) — dobara pura record kiye bina sirf
+    Telegram upload dobara try karo.
+    """
+    doc = lectures_col.find_one({"_id": name})
+    if not doc:
+        return jsonify({"ok": False, "error": "Stream not found"}), 404
+    if doc.get("status") not in ("UPLOAD_FAILED", "ERROR"):
+        return jsonify({"ok": False, "error": f"Retry sirf UPLOAD_FAILED/ERROR status pe hoti hai (current: {doc.get('status')})"}), 409
+    started = retry_upload(name, lectures_col)
+    if not started:
+        return jsonify({"ok": False, "error": "Already running"}), 409
+    return jsonify({"ok": True, "status": "PROCESSING"})
+
+
 @flask_app.route("/api/status/<name>")
 def api_status(name):
     """Student page isko poll karta hai — LIVE / PROCESSING / READY."""
@@ -370,11 +390,20 @@ def api_status(name):
     status = doc.get("status", "LIVE")
     resp = {"ok": True, "status": status, "title": name}
 
-    if status == "READY":
-        bot_username = os.environ.get("TELEGRAM_BOT_USERNAME", "PWSENSEI_FileStoreBot")
+    if status in ("READY", "UPLOAD_FAILED"):
         resp["watch_url"] = f"{PUBLIC_BASE_URL}/recordings/{name}-480p.mp4"
-        resp["download_url"] = f"https://t.me/{bot_username}?start={doc['token']}"
         resp["duration"] = doc.get("duration")
+        # download_url sirf tab do jab Telegram upload actually succeed
+        # hua ho (telegram_file_id set hai) — pehle status hamesha "READY"
+        # ho jaata tha chahe upload fail ho jaaye, isliye ek dead/broken
+        # download button dikhta rehta tha jo hamesha "processing hai"
+        # bolta tha. Ab agar upload fail hua hai to student ko clear pata
+        # chalega ki abhi sirf "Watch Online" available hai.
+        if doc.get("telegram_file_id"):
+            bot_username = os.environ.get("TELEGRAM_BOT_USERNAME", "PWSENSEI_FileStoreBot")
+            resp["download_url"] = f"https://t.me/{bot_username}?start={doc['token']}"
+        else:
+            resp["upload_error"] = doc.get("upload_error") or "Telegram upload pending/failed"
     return jsonify(resp)
 
 

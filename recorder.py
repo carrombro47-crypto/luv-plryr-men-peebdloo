@@ -30,6 +30,11 @@ os.makedirs(RECORDINGS_DIR, exist_ok=True)
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 
+# Telegram Bot API (cloud) ka HARD limit hai ~50MB per upload — isse zyada
+# size ki file bhejne pe upload silently/loudly fail ho jaata hai. Isliye
+# safety margin ke saath 47MB target rakhte hain.
+TELEGRAM_MAX_MB = 47
+
 _active = {}          # name -> threading.Thread
 _active_lock = threading.Lock()
 
@@ -77,11 +82,45 @@ def _probe_duration(path: str):
         return None
 
 
+def _encode_target_size(raw_path: str, out_path: str, duration: float, max_mb: int) -> bool:
+    """
+    Lambi lectures 480p/CRF-28 pe bhi aksar 50MB Telegram limit se bada ban
+    jaate hain. Isliye duration se target bitrate calculate karke re-encode
+    karte hain taaki final file guaranteed budget ke andar rahe.
+    """
+    audio_kbps = 96
+    # 8% safety headroom container overhead ke liye.
+    target_kbps_total = (max_mb * 8192) / max(duration, 1) * 0.92
+    video_kbps = max(int(target_kbps_total - audio_kbps), 150)  # 150k floor
+    return _run_ffmpeg([
+        "-y", "-i", raw_path,
+        "-vf", "scale=-2:480",
+        "-c:v", "libx264", "-preset", "veryfast",
+        "-b:v", f"{video_kbps}k",
+        "-maxrate", f"{int(video_kbps * 1.3)}k",
+        "-bufsize", f"{int(video_kbps * 2)}k",
+        "-c:a", "aac", "-b:a", f"{audio_kbps}k",
+        "-movflags", "+faststart",
+        out_path,
+    ])
+
+
 def _upload_to_telegram(path: str, title: str):
-    """Video Telegram pe upload karke file_id return karo. None on failure."""
+    """
+    Video Telegram pe upload karke file_id return karo.
+    Returns (file_id, error_message). error_message None hai on success.
+    """
     if not BOT_TOKEN or not CHAT_ID:
-        print("[recorder] TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID missing — upload skipped")
-        return None
+        msg = "TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID env var missing on this service"
+        print(f"[recorder] {msg} — upload skipped")
+        return None, msg
+
+    size_mb = os.path.getsize(path) / (1024 * 1024)
+    if size_mb > TELEGRAM_MAX_MB + 2:  # compression ke baad bhi thoda over ho sakta hai
+        msg = f"File still {size_mb:.1f}MB after compression — Telegram Bot API's ~50MB upload limit se bada hai"
+        print(f"[recorder] {msg}")
+        return None, msg
+
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendVideo"
     try:
         with open(path, "rb") as f:
@@ -97,11 +136,13 @@ def _upload_to_telegram(path: str, title: str):
             )
         data = r.json()
         if data.get("ok"):
-            return data["result"]["video"]["file_id"]
+            return data["result"]["video"]["file_id"], None
+        msg = data.get("description", "unknown Telegram API error")
         print(f"[recorder] telegram upload failed: {data}")
+        return None, msg
     except Exception as e:
         print(f"[recorder] telegram upload error: {e}")
-    return None
+        return None, str(e)
 
 
 def _pipeline(name: str, original_url: str, col):
@@ -131,7 +172,7 @@ def _pipeline(name: str, original_url: str, col):
             _set(col, name, status="ERROR", error="Recording failed/empty")
             return
 
-        # ── STEP 2: 480p version banao ──
+        # ── STEP 2: 480p version banao (quality-first CRF encode) ──
         _set(col, name, status="PROCESSING")
         ok = _run_ffmpeg([
             "-y", "-i", raw_path,
@@ -147,15 +188,50 @@ def _pipeline(name: str, original_url: str, col):
 
         duration = _probe_duration(out_path)
 
-        # ── STEP 3: Telegram pe ek baar upload → file_id save ──
-        file_id = _upload_to_telegram(out_path, name)
+        # ── STEP 2b: Telegram ka ~50MB limit — agar CRF encode se bada bana
+        # to duration-based target-bitrate re-encode karke size ke andar
+        # fit karo. Lambi lectures (jaise 1hr+) CRF-28 pe aksar 50MB se bahut
+        # bada ban jaati hain, jisse upload hamesha silently fail hota tha
+        # aur "READY" status hone ke bawajood bhi download kabhi kaam nahi
+        # karta tha.
+        if os.path.exists(out_path):
+            size_mb = os.path.getsize(out_path) / (1024 * 1024)
+            if size_mb > TELEGRAM_MAX_MB and duration:
+                print(f"[recorder] {name}: {size_mb:.1f}MB > {TELEGRAM_MAX_MB}MB limit — re-encoding to target size")
+                tmp_path = out_path + ".tmp.mp4"
+                if _encode_target_size(raw_path if os.path.exists(raw_path) else out_path, tmp_path, duration, TELEGRAM_MAX_MB):
+                    os.replace(tmp_path, out_path)
+                    duration = _probe_duration(out_path) or duration
+                elif os.path.exists(tmp_path):
+                    os.remove(tmp_path)
 
-        _set(
-            col, name,
-            status="READY",
-            telegram_file_id=file_id,
-            duration=duration,
-        )
+        # ── STEP 3: Telegram pe ek baar upload → file_id save ──
+        file_id, upload_error = _upload_to_telegram(out_path, name)
+
+        if file_id:
+            _set(
+                col, name,
+                status="READY",
+                telegram_file_id=file_id,
+                duration=duration,
+                upload_error=None,
+            )
+            print(f"[recorder] ✅ {name} READY (duration={duration}, file_id=yes)")
+        else:
+            # IMPORTANT: pehle status hamesha "READY" ho jaata tha chahe
+            # upload fail ho jaaye — isliye download button dikhta tha par
+            # kaam kabhi nahi karta tha ("processing" hi bolta rehta tha).
+            # Ab "Watch Online" already available hai (video ban chuka hai),
+            # sirf Telegram upload jo fail hua uska clear status alag hai —
+            # admin isko /api/retry-upload/<name> se dobara try kar sakta hai.
+            _set(
+                col, name,
+                status="UPLOAD_FAILED",
+                telegram_file_id=None,
+                duration=duration,
+                upload_error=upload_error,
+            )
+            print(f"[recorder] ⚠️ {name} recording/processing done but Telegram upload failed: {upload_error}")
 
         # raw file cleanup (480p hi keep karte hain)
         if os.path.exists(raw_path) and raw_path != out_path:
@@ -163,8 +239,6 @@ def _pipeline(name: str, original_url: str, col):
                 os.remove(raw_path)
             except OSError:
                 pass
-
-        print(f"[recorder] ✅ {name} READY (duration={duration}, file_id={'yes' if file_id else 'no'})")
 
     except Exception as e:
         print(f"[recorder] pipeline error for {name}: {e}")
@@ -180,6 +254,37 @@ def start_recording(name: str, original_url: str, col) -> bool:
         if name in _active:
             return False
         t = threading.Thread(target=_pipeline, args=(name, original_url, col), daemon=True)
+        _active[name] = t
+        t.start()
+        return True
+
+
+def _retry_upload_pipeline(name: str, col):
+    """480p file already disk pe hai — dobara record kiye bina sirf upload retry karo."""
+    out_path = os.path.join(RECORDINGS_DIR, f"{name}-480p.mp4")
+    try:
+        if not os.path.exists(out_path):
+            _set(col, name, status="UPLOAD_FAILED", upload_error="Recorded file disk pe nahi mila — dobara record karna hoga")
+            return
+        duration = _probe_duration(out_path)
+        file_id, upload_error = _upload_to_telegram(out_path, name)
+        if file_id:
+            _set(col, name, status="READY", telegram_file_id=file_id, duration=duration, upload_error=None)
+            print(f"[recorder] ✅ {name} retry upload succeeded")
+        else:
+            _set(col, name, status="UPLOAD_FAILED", telegram_file_id=None, duration=duration, upload_error=upload_error)
+            print(f"[recorder] ⚠️ {name} retry upload failed: {upload_error}")
+    finally:
+        with _active_lock:
+            _active.pop(name, None)
+
+
+def retry_upload(name: str, col) -> bool:
+    """Sirf Telegram upload dobara try karo (recording dobara nahi karni). False if already running."""
+    with _active_lock:
+        if name in _active:
+            return False
+        t = threading.Thread(target=_retry_upload_pipeline, args=(name, col), daemon=True)
         _active[name] = t
         t.start()
         return True
