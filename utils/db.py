@@ -15,7 +15,8 @@ def get_db():
     """
     MongoDB handle. Collections used:
       - lectures: { _id: name(slug), original_url, status, token,
-                    telegram_file_id, duration, created_at, updated_at }
+                    video_filename, duration, file_size, created_at,
+                    updated_at }
     """
     global _client
     mongo_uri = os.environ.get("MONGO_URI", _DEFAULT_MONGO_URI)
