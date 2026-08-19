@@ -126,7 +126,7 @@ footer { text-align:center; color:var(--muted); font-size:11.5px; padding:14px; 
         <div class="logo">▶</div>
         <div>
             <h1>PW LIVE PLAYER</h1>
-            <small>Quality Education 💎</small>
+            <small>Premium Server</small>
         </div>
     </div>
     <div class="live-badge" id="liveBadge">
@@ -143,7 +143,7 @@ footer { text-align:center; color:var(--muted); font-size:11.5px; padding:14px; 
         <!-- Custom controls -->
         <div class="controls" id="controls">
             <div class="controls-top">
-                <button class="go-live" id="btnGoLive"><span class="gdot"></span>LIVE</button>
+                <button class="go-live" id="btnGoLive"><span class="gdot"></span>Go Live</button>
             </div>
             <div class="controls-bottom">
                 <button class="cbtn vod-only" id="btnSkipBack" title="-10s" style="display:none;">⏪</button>
@@ -158,10 +158,10 @@ footer { text-align:center; color:var(--muted); font-size:11.5px; padding:14px; 
         <!-- Overlay -->
         <div class="overlay" id="overlay">
             <div class="spinner" id="spinner"></div>
-            <div class="msg" id="overlayMsg">Live class load ho rahi hai…</div>
+            <div class="msg" id="overlayMsg">Loading Please Wait...</div>
             <div id="endedBox" style="display:none; flex-direction:column; align-items:center; gap:10px;">
                 <div class="ended-title">📺 Class Recorded</div>
-                <div class="ended-sub">Live khatam ho gayi — ab aap recording dekh ya download kar sakte ho.</div>
+                <div class="ended-sub">The live stream has ended — you can now watch or download the recording.</div>
                 <div class="action-row">
                     <button class="big-btn watch" id="btnWatch">▶ Watch Online</button>
                     <a class="big-btn download" id="btnDownload" href="#" target="_blank" rel="noopener">⬇ Download Now</a>
@@ -171,7 +171,7 @@ footer { text-align:center; color:var(--muted); font-size:11.5px; padding:14px; 
     </div>
 </main>
 
-<footer>Powered By SmartyMS & Team Toxic ❤️‍🩹</footer>
+<footer>Made With ❤️</footer>
 
 <script>
 (function () {
@@ -218,7 +218,7 @@ footer { text-align:center; color:var(--muted); font-size:11.5px; padding:14px; 
         clearLoadWatchdog();
         loadWatchdog = setTimeout(function () {
             if (!manifestEverLoaded) {
-                showError("Stream start nahi ho pa raha — link expire ho gaya ya server slow hai. Thodi der baad refresh karo.");
+                showError("The stream won't start — the link has expired or the server is slow. Refresh after a while.");
             }
         }, LOAD_WATCHDOG_MS);
     }
@@ -309,7 +309,7 @@ footer { text-align:center; color:var(--muted); font-size:11.5px; padding:14px; 
         showLoading("Live class load ho rahi hai…");
 
         if (typeof Hls === "undefined") {
-            showError("Player load nahi hua — internet check karo.");
+            showError("Class didn't load — check your internet Connection.");
             return;
         }
 
@@ -332,7 +332,7 @@ footer { text-align:center; color:var(--muted); font-size:11.5px; padding:14px; 
                 clearLoadWatchdog();
                 video.muted = false;
                 video.play().catch(function () {
-                    video.muted = true; // autoplay policy fallback
+                    video.muted = false; // autoplay policy fallback
                     video.play().catch(function () {});
                 });
             });
@@ -360,7 +360,7 @@ footer { text-align:center; color:var(--muted); font-size:11.5px; padding:14px; 
                         data.details === "manifestParsingError";
 
                     if (!manifestEverLoaded && neverStarted) {
-                        showError("Stream load nahi ho paya — link expire ho gaya ya server down hai. Thodi der baad refresh karo.");
+                        showError("The stream failed to load — the link has expired or the server is down, Please refresh after a while.");
                         return;
                     }
                     if (!manifestEverLoaded) {
@@ -376,7 +376,7 @@ footer { text-align:center; color:var(--muted); font-size:11.5px; padding:14px; 
                 } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
                     hls.recoverMediaError();
                 } else {
-                    showError("Stream error — thodi der baad page refresh karo.");
+                    showError("Stream error — refresh the page after a while.");
                 }
             });
 
@@ -393,7 +393,7 @@ footer { text-align:center; color:var(--muted); font-size:11.5px; padding:14px; 
                 video.play().catch(function () {});
             });
         } else {
-            showError("Is browser mein HLS support nahi hai.");
+            showError("HLS is not supported in this browser.");
         }
     }
 
@@ -405,7 +405,7 @@ footer { text-align:center; color:var(--muted); font-size:11.5px; padding:14px; 
         }
     });
     video.addEventListener("error", function () {
-        if (video.getAttribute("src")) showError("Video error — refresh karke try karo.");
+        if (video.getAttribute("src")) showError("Video error – please refresh and fix.");
     });
 
     // Live class ki speed hamesha 1x — kisi bhi tarah (native context menu,
