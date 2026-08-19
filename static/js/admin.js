@@ -65,11 +65,11 @@ function setMode(mode) {
   if (mode === "live") {
     linkLabel.textContent = "PASTE ORIGINAL M3U8 LINK HERE:";
     originalLinkInput.placeholder = "https://...index.m3u8?Signature=...";
-    modeHint.textContent = "Live stream ka index.m3u8 URL — end hote hi system khud detect karke record/process/upload karega.";
+    modeHint.textContent = "Live stream ka index.m3u8 URL — end hote hi system khud detect karke record/process karega aur direct download ready kar dega.";
   } else {
     linkLabel.textContent = "PASTE RECORDED (master.m3u8 / mp4) LINK HERE:";
     originalLinkInput.placeholder = "https://...master.m3u8 ya https://...video.mp4";
-    modeHint.textContent = "Already-recorded playable URL — seedha download+480p+Telegram upload shuru ho jaayega, live-wait ki zaroorat nahi.";
+    modeHint.textContent = "Already-recorded playable URL — seedha download+480p processing shuru ho jaayega, live-wait ki zaroorat nahi.";
   }
 }
 modeLiveBtn.addEventListener("click", () => setMode("live"));
