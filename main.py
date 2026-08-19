@@ -1,6 +1,7 @@
 import base64
 import os
 import re
+import threading
 import time
 import unicodedata
 import functools
@@ -14,7 +15,8 @@ from flask import (
 )
 
 from utils.db import get_db
-from recorder import start_recording, retry_upload, resume_pending_jobs, BOT_USERNAME
+from utils.text import display_title
+from recorder import start_recording, resume_pending
 
 # ─── Configuration ──────────────────────────────────────────────────────────
 # Public domain used in every generated link. ONLY line to edit if this
@@ -43,13 +45,6 @@ flask_app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(hours=12)
 
 db = get_db()
 lectures_col = db["lectures"]
-
-# Server (re)start hote hi purani stuck RECORDING/PROCESSING/UPLOADING/
-# ENDING jobs ko resolve karo (crash-recovery — spec section 10).
-try:
-    resume_pending_jobs(lectures_col)
-except Exception as e:
-    print(f"[MONGODB] resume_pending_jobs failed at startup: {e}")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -308,9 +303,6 @@ def api_generate():
     data = request.get_json(silent=True) or {}
     original_url = (data.get("original_url") or "").strip()
     desired_name = (data.get("name") or "").strip()
-    # "vod" = already-recorded/master.m3u8 playable URL — live-end-detection
-    # ki zaroorat nahi, seedha download+process+upload shuru ho jaata hai.
-    source_type = "vod" if data.get("source_type") == "vod" else "live"
 
     if not original_url:
         return jsonify({"ok": False, "error": "Original m3u8 link required"}), 400
@@ -331,8 +323,8 @@ def api_generate():
         {
             "$set": {
                 "original_url": original_url,
-                "source_type": source_type,
-                "status": "RECORDING" if source_type == "vod" else "LIVE",
+                "status": "LIVE",
+                "title": display_title(name),
                 "updated_at": now,
             },
             "$setOnInsert": {
@@ -341,19 +333,21 @@ def api_generate():
                 "telegram_file_id": None,
                 "duration": None,
             },
+            # Har naye/re-generate hone par watch_gen bump (field na ho to
+            # $inc khud 0 se shuru karke 1 kar deta hai) — agar is naam ka
+            # koi purana background watcher chal raha ho (purani link ke
+            # liye) to wo khud-ba-khud supersede/stop ho jaayega, aur ek
+            # naya watcher naye original_url ke liye start hoga neeche.
+            "$inc": {"watch_gen": 1},
         },
         upsert=True,
     )
     doc = lectures_col.find_one({"_id": name})
 
-    # Link generate hote hi recording auto-start ho jaati hai — LIVE aur VOD
-    # dono ke liye. Pehle sirf VOD auto-start hoti thi; LIVE mode me admin
-    # ko manually "Start Recording" click karna padta tha — agar wo click
-    # miss ho jaaye, status hamesha "LIVE" hi atka reh jaata tha aur
-    # end-detection kabhi trigger hi nahi hoti thi. Ab dono automatic hain
-    # — LIVE mode me recorder khud patiently wait karega jab tak class
-    # actually live na ho jaaye (LIVE_CONNECT_MAX_WAIT_SECONDS tak).
-    start_recording(name, original_url, lectures_col, source_type=source_type)
+    # Live end hote hi automatic download + Telegram upload ke liye
+    # background watcher — koi manual "Start Recording" click zaroori
+    # nahi, generate hote hi khud shuru ho jaata hai.
+    start_recording(name, original_url, lectures_col)
 
     public_link = f"{PUBLIC_BASE_URL}/{name}"
     return jsonify({
@@ -361,69 +355,45 @@ def api_generate():
         "name": name,
         "public_link": public_link,
         "status": doc.get("status", "LIVE"),
-        "source_type": source_type,
     })
 
 
 @flask_app.route("/api/record/<name>", methods=["POST"])
 @admin_required
 def api_record(name):
-    """Live recording start karo (background ffmpeg worker + end-detector)."""
+    """Manual override/kick — agar kisi wajah se background watcher active
+    nahi hai (e.g. race condition) to ise idempotently (re)start karo.
+    Normal flow mein iski zaroorat nahi padti — generate hote hi automatic
+    watcher already chal raha hota hai."""
     doc = lectures_col.find_one({"_id": name})
     if not doc:
         return jsonify({"ok": False, "error": "Stream not found"}), 404
     status = doc.get("status")
-    if status in ("RECORDING", "PROCESSING", "UPLOADING", "ENDING"):
-        return jsonify({"ok": False, "error": f"Already {status.lower()}"}), 409
-    started = start_recording(name, doc["original_url"], lectures_col, source_type=doc.get("source_type", "live"))
+    if status == "READY":
+        return jsonify({"ok": False, "error": "Already READY"}), 409
+    started = start_recording(name, doc["original_url"], lectures_col)
     if not started:
-        return jsonify({"ok": False, "error": "Already recording"}), 409
-    return jsonify({"ok": True, "status": "RECORDING"})
-
-
-@flask_app.route("/api/retry-upload/<name>", methods=["POST"])
-@admin_required
-def api_retry_upload(name):
-    """
-    Recording/480p file already disk pe ban chuka hai lekin Telegram upload
-    fail ho gaya tha — dobara pura record kiye bina sirf Telegram upload
-    dobara try karo.
-    """
-    doc = lectures_col.find_one({"_id": name})
-    if not doc:
-        return jsonify({"ok": False, "error": "Stream not found"}), 404
-    if doc.get("status") not in ("UPLOAD_FAILED",):
-        return jsonify({"ok": False, "error": f"Retry sirf UPLOAD_FAILED status pe hoti hai (current: {doc.get('status')})"}), 409
-    started = retry_upload(name, lectures_col)
-    if not started:
-        return jsonify({"ok": False, "error": "Already running"}), 409
-    return jsonify({"ok": True, "status": "UPLOADING"})
+        return jsonify({"ok": True, "status": status, "note": "Watcher already running"})
+    return jsonify({"ok": True, "status": doc.get("status", "LIVE")})
 
 
 @flask_app.route("/api/status/<name>")
 def api_status(name):
-    """Student page isko poll karta hai — pura state-machine cover karta hai."""
+    """Student page isko poll karta hai — LIVE / PROCESSING / READY."""
     doc = lectures_col.find_one({"_id": name})
     if not doc:
         return jsonify({"ok": False, "error": "Not found"}), 404
 
     status = doc.get("status", "LIVE")
-    resp = {"ok": True, "status": status, "title": name}
+    resp = {"ok": True, "status": status, "title": display_title(name)}
 
-    if status in ("READY", "UPLOAD_FAILED"):
+    if status == "READY":
+        bot_username = os.environ.get("TELEGRAM_BOT_USERNAME", "PWSENSEI_FileStoreBot")
         resp["watch_url"] = f"{PUBLIC_BASE_URL}/recordings/{name}-480p.mp4"
+        resp["download_url"] = f"https://t.me/{bot_username}?start={doc['token']}"
         resp["duration"] = doc.get("duration")
-        # download_url sirf tab do jab Telegram upload actually succeed
-        # hua ho (telegram_file_id set hai) — warna student ko clear pata
-        # chalega ki abhi sirf "Watch Online" available hai.
-        if doc.get("telegram_file_id"):
-            resp["download_url"] = f"https://t.me/{BOT_USERNAME}?start={doc['token']}"
-        else:
-            resp["upload_error"] = doc.get("upload_error") or "Telegram upload pending/failed"
-    elif status == "FAILED":
-        resp["error"] = doc.get("error")
-        resp["error_type"] = doc.get("error_type")
-
+    elif status == "ERROR":
+        resp["error"] = doc.get("error", "Processing failed")
     return jsonify(resp)
 
 
@@ -456,7 +426,19 @@ def play(name):
     doc = lectures_col.find_one({"_id": name})
     if not doc:
         return "Link galat hai ya Class expire ho gayi. 😔", 404
-    return render_template("player.html", name=name, status=doc.get("status", "LIVE"))
+    return render_template(
+        "player.html",
+        name=name,
+        title=display_title(name),
+        status=doc.get("status", "LIVE"),
+    )
+
+
+# ── Startup recovery ─────────────────────────────────────────────────────
+# App start/redeploy hote hi jo lectures LIVE/RECORDING/PROCESSING atki hui
+# thi unke background watchers dobara chalu karo, taaki koi bhi live class
+# jiska recording pending tha wo aage bhi khud-ba-khud process ho jaaye.
+threading.Thread(target=resume_pending, args=(lectures_col,), daemon=True).start()
 
 
 def run_flask():
