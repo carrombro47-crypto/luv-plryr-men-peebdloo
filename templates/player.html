@@ -116,6 +116,9 @@ main { flex:1; display:flex; flex-direction:column; align-items:center; padding:
 .go-live .gdot { width:7px; height:7px; border-radius:50%; background:#fff; animation:blink 1s infinite; }
 .go-live.at-live .gdot { animation:none; }
 
+.live-elapsed { display:flex; align-items:center; gap:6px; }
+.live-elapsed .ldot { width:6px; height:6px; border-radius:50%; background:var(--accent2); flex-shrink:0; }
+
 footer { text-align:center; color:var(--muted); font-size:11.5px; padding:14px; }
 </style>
 </head>
@@ -146,6 +149,7 @@ footer { text-align:center; color:var(--muted); font-size:11.5px; padding:14px; 
                 <button class="go-live" id="btnGoLive"><span class="gdot"></span>Go Live</button>
             </div>
             <div class="controls-bottom">
+                <span class="time-label live-elapsed live-only" id="liveElapsedLabel"><span class="ldot"></span><span id="liveElapsedText">00:00</span></span>
                 <button class="cbtn vod-only" id="btnSkipBack" title="-10s" style="display:none;">⏪</button>
                 <div class="progress-wrap" id="progressWrap"><div class="progress-bar" id="progressBar"></div></div>
                 <button class="cbtn vod-only" id="btnSkipFwd" title="+10s" style="display:none;">⏩</button>
@@ -164,7 +168,7 @@ footer { text-align:center; color:var(--muted); font-size:11.5px; padding:14px; 
                 <div class="ended-sub">The live stream has ended — you can now watch or download the recording.</div>
                 <div class="action-row">
                     <button class="big-btn watch" id="btnWatch">▶ Watch Online</button>
-                    <a class="big-btn download" id="btnDownload" href="#" target="_blank" rel="noopener">⬇ Download Now</a>
+                    <a class="big-btn download" id="btnDownload" href="#" download rel="noopener">⬇ Download Now</a>
                 </div>
             </div>
         </div>
@@ -198,10 +202,20 @@ footer { text-align:center; color:var(--muted); font-size:11.5px; padding:14px; 
     var progressBar = document.getElementById("progressBar");
     var progressWrap = document.getElementById("progressWrap");
     var timeLabel = document.getElementById("timeLabel");
+    var liveElapsedLabel = document.getElementById("liveElapsedLabel");
+    var liveElapsedText = document.getElementById("liveElapsedText");
 
     var hls = null;
     var isLive = true;
     var statusPoller = null;
+
+    // Live "kitna record ho chuka hai" timer — asli data hi use hota hai:
+    // har playlist refresh (LEVEL_LOADED) par hls.js jo `totalduration`
+    // deta hai wahi actual m3u8 se extract kiya hua elapsed duration hai.
+    // Do refreshes ke beech mein bhi timer smoothly tick kare, isliye
+    // last-known value + wall-clock interpolate karte hain.
+    var liveDurationBase = null;
+    var liveDurationBaseAt = 0;
 
     // Tracks whether playback has EVER actually started for this stream.
     // Needed to tell apart "stream never came up at all" (real failure —
@@ -240,6 +254,24 @@ footer { text-align:center; color:var(--muted); font-size:11.5px; padding:14px; 
     }
     function hideOverlay() { overlay.classList.add("hidden"); }
 
+    // Browsers unmuted autoplay ko almost always block karte hain (koi
+    // prior user-interaction na ho to). Purana code sirf unmuted play()
+    // retry karta tha — agar wo block ho jaaye to video hamesha ke liye
+    // paused reh jaata tha (chahe ek frame render ho jaaye), aur "playing"
+    // event kabhi fire hi nahi hota — isi wajah se "Loading..." overlay
+    // ek asal mein chal rahi video ke upar hamesha stuck dikhta tha.
+    // Fix: pehle normal (sound ke saath) autoplay try karo — kaam kare to
+    // best. Block ho jaaye to guaranteed-allowed MUTED autoplay pe fallback
+    // karo (taaki playback zaroor start ho aur overlay turant hat jaaye).
+    // User video par tap karega to pehle se maujood click-handler khud
+    // unmute kar dega.
+    function attemptAutoplay() {
+        video.play().catch(function () {
+            video.muted = true;
+            video.play().catch(function () {});
+        });
+    }
+
     function showEnded(st) {
         overlay.classList.remove("hidden");
         spinner.style.display = "none";
@@ -254,6 +286,9 @@ footer { text-align:center; color:var(--muted); font-size:11.5px; padding:14px; 
             btnGoLive.style.display = "none";
             document.querySelectorAll(".vod-only").forEach(function (el) {
                 el.style.display = "";
+            });
+            document.querySelectorAll(".live-only").forEach(function (el) {
+                el.style.display = "none";
             });
             if (hls) { hls.destroy(); hls = null; }
             video.src = st.watch_url;
@@ -330,17 +365,19 @@ footer { text-align:center; color:var(--muted); font-size:11.5px; padding:14px; 
             hls.on(Hls.Events.MANIFEST_PARSED, function () {
                 manifestEverLoaded = true;
                 clearLoadWatchdog();
-                video.muted = false;
-                video.play().catch(function () {
-                    video.muted = false; // autoplay policy fallback
-                    video.play().catch(function () {});
-                });
+                attemptAutoplay();
             });
 
-            // Playlist mein ENDLIST aa gaya → live khatam
+            // Playlist mein ENDLIST aa gaya → live khatam.
+            // Har level-load par bhi totalduration extract karke elapsed
+            // timer update karte hain — yahi asli m3u8 se nikla hua data hai.
             hls.on(Hls.Events.LEVEL_LOADED, function (_, data) {
                 if (data.details && data.details.live === false) {
                     startStatusPolling();
+                }
+                if (data.details && typeof data.details.totalduration === "number") {
+                    liveDurationBase = data.details.totalduration;
+                    liveDurationBaseAt = Date.now();
                 }
             });
 
@@ -390,7 +427,7 @@ footer { text-align:center; color:var(--muted); font-size:11.5px; padding:14px; 
             video.addEventListener("loadedmetadata", function () {
                 manifestEverLoaded = true;
                 clearLoadWatchdog();
-                video.play().catch(function () {});
+                attemptAutoplay();
             });
         } else {
             showError("HLS is not supported in this browser.");
@@ -457,11 +494,22 @@ footer { text-align:center; color:var(--muted); font-size:11.5px; padding:14px; 
     setInterval(function () {
         try {
             if (isLive) {
+                // Safety net: video actually chal raha hai (currentTime aage
+                // badh raha hai) to overlay ko hamesha ke liye hidden rehna
+                // chahiye, chahe kisi wajah se "playing" event miss ho gaya ho.
+                if (!video.paused && !video.ended && video.currentTime > 0) {
+                    if (!overlay.classList.contains("hidden")) hideOverlay();
+                    liveBadge.classList.add("show");
+                }
                 if (video.seekable.length) {
                     var end = video.seekable.end(video.seekable.length - 1);
                     var start = video.seekable.start(0);
                     var pct = end > start ? ((video.currentTime - start) / (end - start)) * 100 : 0;
                     progressBar.style.width = Math.min(100, Math.max(0, pct)) + "%";
+                }
+                if (liveDurationBase !== null) {
+                    var elapsed = liveDurationBase + (Date.now() - liveDurationBaseAt) / 1000;
+                    liveElapsedText.textContent = fmt(elapsed);
                 }
                 updateGoLiveState();
             } else if (video.duration) {
