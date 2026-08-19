@@ -346,10 +346,14 @@ def api_generate():
     )
     doc = lectures_col.find_one({"_id": name})
 
-    if source_type == "vod":
-        # Already recorded hai — turant download+process+upload pipeline
-        # shuru karo, admin ko alag se "Start Recording" click nahi karna.
-        start_recording(name, original_url, lectures_col, source_type="vod")
+    # Link generate hote hi recording auto-start ho jaati hai — LIVE aur VOD
+    # dono ke liye. Pehle sirf VOD auto-start hoti thi; LIVE mode me admin
+    # ko manually "Start Recording" click karna padta tha — agar wo click
+    # miss ho jaaye, status hamesha "LIVE" hi atka reh jaata tha aur
+    # end-detection kabhi trigger hi nahi hoti thi. Ab dono automatic hain
+    # — LIVE mode me recorder khud patiently wait karega jab tak class
+    # actually live na ho jaaye (LIVE_CONNECT_MAX_WAIT_SECONDS tak).
+    start_recording(name, original_url, lectures_col, source_type=source_type)
 
     public_link = f"{PUBLIC_BASE_URL}/{name}"
     return jsonify({

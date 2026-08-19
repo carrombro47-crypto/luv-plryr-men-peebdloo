@@ -114,6 +114,18 @@ LIVE_MAX_DURATION_SECONDS = int(os.environ.get("LIVE_MAX_DURATION_SECONDS", str(
 MAX_RETRIES = int(os.environ.get("MAX_RETRIES", "3"))
 MIN_FREE_DISK_GB = float(os.environ.get("MIN_FREE_DISK_GB", "2"))
 
+# ─── Live-CONNECT retry (alag hai live-END-detection se) ───────────────────
+# Admin link generate karte hi (class ke shuru hone se PEHLE bhi) recording
+# ab automatically shuru ho jaati hai. Lekin agar class abhi shuru nahi
+# hui, ffmpeg turant exit ho jaata hai (koi live data nahi milta) — pehle
+# isse galti se "live end ho gayi" samajh liya jaata tha aur turant FAILED
+# maar diya jaata tha. Ab hum pehle sirf "connection establish" karte hain:
+# jab tak actual data record na hone lage, patiently retry karte hain.
+LIVE_CONNECT_MAX_WAIT_SECONDS = int(os.environ.get("LIVE_CONNECT_MAX_WAIT_SECONDS", str(30 * 60)))
+LIVE_CONNECT_RETRY_DELAY = int(os.environ.get("LIVE_CONNECT_RETRY_DELAY", "15"))
+LIVE_CONNECT_ESTABLISH_TIMEOUT = int(os.environ.get("LIVE_CONNECT_ESTABLISH_TIMEOUT", "45"))
+LIVE_CONNECT_MIN_BYTES = int(os.environ.get("LIVE_CONNECT_MIN_BYTES", "200000"))  # ~200KB
+
 _active = {}          # name -> threading.Thread
 _active_lock = threading.Lock()
 
@@ -308,6 +320,32 @@ def _stop_ffmpeg_gracefully(proc: subprocess.Popen, name: str):
         pass
 
 
+def _wait_for_connection(raw_path: str, proc: subprocess.Popen,
+                          timeout: int = LIVE_CONNECT_ESTABLISH_TIMEOUT,
+                          min_bytes: int = LIVE_CONNECT_MIN_BYTES) -> bool:
+    """
+    Naya start hua ffmpeg process ko thodi der dekhte hain — kya woh actually
+    live data likh raha hai? Agar class abhi shuru nahi hui (ya URL/headers
+    me koi issue hai), ffmpeg turant EOF/error ho jaata hai bina kuch likhe
+    — is case me False return karte hain taaki caller retry kare, "live
+    end ho gayi" na samjhe.
+    """
+    start = time.time()
+    while time.time() - start < timeout:
+        if proc.poll() is not None:
+            return False  # ffmpeg khud hi turant exit ho gaya — connect fail
+        try:
+            if os.path.exists(raw_path) and os.path.getsize(raw_path) >= min_bytes:
+                return True
+        except OSError:
+            pass
+        time.sleep(2)
+    try:
+        return os.path.exists(raw_path) and os.path.getsize(raw_path) >= min_bytes
+    except OSError:
+        return False
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 #  2) TELEGRAM UPLOAD (Pyrogram / MTProto)
 # ═══════════════════════════════════════════════════════════════════════════
@@ -452,10 +490,10 @@ def _pipeline_live(name: str, original_url: str, col):
     raw_path = os.path.join(RECORDINGS_DIR, f"{name}-raw.mp4")
     out_path = os.path.join(RECORDINGS_DIR, f"{name}-480p.mp4")
 
-    _log("LIVE", f"{name}: recording shuru")
+    _log("LIVE", f"{name}: recording pipeline shuru — live stream se connect ho raha hai")
     _set(col, name, status="RECORDING")
 
-    cmd = [
+    ffmpeg_cmd = [
         "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
         "-headers", FFMPEG_HEADERS,
         "-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5",
@@ -463,13 +501,70 @@ def _pipeline_live(name: str, original_url: str, col):
         "-c", "copy", "-movflags", "+faststart",
         raw_path,
     ]
-    try:
-        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
-    except Exception as e:
-        _set(col, name, status="FAILED", error=f"ffmpeg start nahi hua: {e}", error_type="ffmpeg_start")
-        _log("ERROR", f"{name}: ffmpeg start fail — {e}")
-        return
 
+    # ── PHASE 1: connection establish karo ──────────────────────────────
+    # Link generate hote hi recording auto-start ho jaati hai — ho sakta hai
+    # class abhi shuru na hui ho, ya ek transient connect-glitch ho. Pehle
+    # ek quick ffmpeg-exit ko turant "live end ho gayi" maan liya jaata tha
+    # jo galat tha — ab jab tak real data record nahi hone lagta, patiently
+    # retry karte hain (max LIVE_CONNECT_MAX_WAIT_SECONDS tak).
+    connect_wait_start = time.time()
+    attempt = 0
+    proc = None
+    last_stderr = ""
+
+    while True:
+        attempt += 1
+        if os.path.exists(raw_path):
+            try:
+                os.remove(raw_path)
+            except OSError:
+                pass
+        try:
+            proc = subprocess.Popen(ffmpeg_cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
+        except Exception as e:
+            _set(col, name, status="FAILED", error=f"ffmpeg start nahi hua: {e}", error_type="ffmpeg_start")
+            _log("ERROR", f"{name}: ffmpeg start fail — {e}")
+            return
+
+        _log("LIVE", f"{name}: connect attempt {attempt}…")
+        connected = _wait_for_connection(raw_path, proc)
+
+        if connected:
+            _log("LIVE", f"{name}: ✅ connected — asli recording shuru")
+            break
+
+        try:
+            if proc.stderr:
+                last_stderr = proc.stderr.read().decode(errors="ignore")[-1500:]
+        except Exception:
+            pass
+        _stop_ffmpeg_gracefully(proc, name)
+        try:
+            if proc.poll() is None:
+                proc.wait(timeout=10)
+        except Exception:
+            pass
+
+        elapsed_total = time.time() - connect_wait_start
+        if elapsed_total >= LIVE_CONNECT_MAX_WAIT_SECONDS:
+            _set(
+                col, name, status="FAILED",
+                error=(
+                    f"Live stream se {LIVE_CONNECT_MAX_WAIT_SECONDS // 60} min tak connect nahi ho paya "
+                    f"(class abhi shuru nahi hui ho sakti, ya link expire/invalid hai)."
+                    + (f" ffmpeg: {last_stderr[-300:]}" if last_stderr else "")
+                ),
+                error_type="live_connect_timeout",
+            )
+            _log("ERROR", f"{name}: max connect-wait ({LIVE_CONNECT_MAX_WAIT_SECONDS}s) exceeded, giving up")
+            return
+
+        _log("LIVE", f"{name}: abhi live data nahi mil raha — {LIVE_CONNECT_RETRY_DELAY}s me retry "
+                      f"(total wait {elapsed_total:.0f}s / {LIVE_CONNECT_MAX_WAIT_SECONDS}s)")
+        time.sleep(LIVE_CONNECT_RETRY_DELAY)
+
+    # ── PHASE 2: ab genuinely connected hain — live-end tak monitor karo ──
     reason = _wait_for_live_end(name, original_url, proc)
 
     _set(col, name, status="ENDING")
