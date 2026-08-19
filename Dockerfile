@@ -2,14 +2,9 @@ FROM python:3.12.1-slim-bookworm
 
 WORKDIR /app
 
-# FFmpeg + tgcrypto compilation ke liye required packages
+# FFmpeg — recording/transcoding ke liye required
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
-    gcc \
-    g++ \
-    make \
-    python3-dev \
-    libffi-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # pip update

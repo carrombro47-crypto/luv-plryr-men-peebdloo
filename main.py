@@ -330,8 +330,9 @@ def api_generate():
             "$setOnInsert": {
                 "created_at": now,
                 "token": token,
-                "telegram_file_id": None,
                 "duration": None,
+                "file_size": None,
+                "video_filename": None,
             },
             # Har naye/re-generate hone par watch_gen bump (field na ho to
             # $inc khud 0 se shuru karke 1 kar deta hai) — agar is naam ka
@@ -344,8 +345,8 @@ def api_generate():
     )
     doc = lectures_col.find_one({"_id": name})
 
-    # Live end hote hi automatic download + Telegram upload ke liye
-    # background watcher — koi manual "Start Recording" click zaroori
+    # Live end hote hi automatic download + local-storage processing ke
+    # liye background watcher — koi manual "Start Recording" click zaroori
     # nahi, generate hote hi khud shuru ho jaata hai.
     start_recording(name, original_url, lectures_col)
 
@@ -388,10 +389,10 @@ def api_status(name):
     resp = {"ok": True, "status": status, "title": display_title(name)}
 
     if status == "READY":
-        bot_username = os.environ.get("TELEGRAM_BOT_USERNAME", "PWSENSEI_FileStoreBot")
         resp["watch_url"] = f"{PUBLIC_BASE_URL}/recordings/{name}-480p.mp4"
-        resp["download_url"] = f"https://t.me/{bot_username}?start={doc['token']}"
+        resp["download_url"] = f"{PUBLIC_BASE_URL}/api/videos/{quote(name)}/download"
         resp["duration"] = doc.get("duration")
+        resp["file_size"] = doc.get("file_size")
     elif status == "ERROR":
         resp["error"] = doc.get("error", "Processing failed")
     return jsonify(resp)
@@ -402,6 +403,42 @@ def recordings(filename):
     # conditional=True → Range support (Watch Online seek ke liye)
     return send_from_directory(
         RECORDINGS_DIR, filename, conditional=True, mimetype="video/mp4"
+    )
+
+
+@flask_app.route("/api/videos/<name>/download")
+def api_download(name):
+    """
+    Direct browser/device download — Telegram ki koi zaroorat nahi.
+    - send_from_directory (Werkzeug send_file) file ko chunks mein
+      stream karta hai, poora file kabhi bhi server RAM mein load nahi
+      hota — 200-900MB files ke liye bhi safe hai.
+    - conditional=True → HTTP Range support (browsers isse resume-able
+      / paused-resumed downloads karte hain).
+    - as_attachment + download_name → proper
+      "Content-Disposition: attachment; filename=..." header, taaki
+      click karte hi seedha device storage mein save ho, naye tab mein
+      khule nahi.
+    """
+    doc = lectures_col.find_one({"_id": name}, {"status": 1, "video_filename": 1})
+    if not doc:
+        return jsonify({"error": "Stream not found"}), 404
+    if doc.get("status") != "READY":
+        return jsonify({"error": "Video abhi ready nahi hai"}), 409
+
+    filename = doc.get("video_filename") or f"{name}-480p.mp4"
+    file_path = os.path.join(RECORDINGS_DIR, filename)
+    if not os.path.exists(file_path):
+        return jsonify({"error": "File missing on server"}), 404
+
+    download_name = f"{display_title(name)}.mp4"
+    return send_from_directory(
+        RECORDINGS_DIR,
+        filename,
+        as_attachment=True,
+        download_name=download_name,
+        mimetype="video/mp4",
+        conditional=True,
     )
 
 

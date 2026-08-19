@@ -1,6 +1,9 @@
 """
-recorder.py — Live end hone ke baad automatic download + Telegram delivery
-pipeline. Fully rewritten (advanced version).
+recorder.py — Live end hone ke baad automatic download + local-storage
+pipeline. Video seedha server ke persistent "recordings" folder mein save
+hota hai aur website se hi (Telegram ki koi zaroorat nahi) direct
+browser/device download ke liye serve hota hai — dekho main.py mein
+`/api/videos/<name>/download`.
 
 ──────────────────────────────────────────────────────────────────────────
 PURANA PROBLEM (kyun "Download" option kabhi aata hi nahi tha):
@@ -11,10 +14,6 @@ PURANA PROBLEM (kyun "Download" option kabhi aata hi nahi tha):
      playlist mein rehte hain) — isliye agar recording thodi der se start
      hui to shuruaat ke segments already CDN se expire ho chuke hote the
      aur video incomplete/corrupt milta tha.
-  3. Telegram ka normal Bot API (api.telegram.org) sirf ~50MB tak hi bot
-     se upload allow karta hai — ek 1-2hr 480p lecture usse bada hota hai,
-     isliye upload silently fail ho jaata tha aur status kabhi READY nahi
-     hota tha (hence "download button" kabhi nahi aata tha).
 
 NAYA SYSTEM (advanced fix):
   1. Har lecture ke liye ek background "watcher" thread automatic start
@@ -28,25 +27,20 @@ NAYA SYSTEM (advanced fix):
      naya URL banate hain. Zyaadatar PW/CDN setups mein ye hi poori class
      (start se end tak) ka FULL ARCHIVED VOD playlist hota hai — sliding
      window ka koi issue nahi, poora lecture milta hai. Kaam na kare to
-     automatically fallback chain try hoti hai.
+     automatically fallback chain try hoti hai. Ye download `index.m3u8`
+     ke live-end hone ke turant baad hi shuru kar diya jaata hai kyunki
+     archived playlist sirf limited time (~10-15 min) tak hi available
+     rehta hai.
   3. Us master playlist ko ek hi shot mein ffmpeg se mp4 mein download
      karte hain (ye already non-realtime hai kyunki playlist ended/finite
      hai — ffmpeg jitni fast ho utni fast segments khींch leta hai).
-  4. 480p mein convert karke Telegram par upload karte hain — agar
-     TELEGRAM_LOCAL_API_URL configured hai (local Bot API server, MTProto
-     based) to usse (koi 50MB limit nahi, 2GB tak) — warna normal remote
-     Bot API pe fallback (50MB limit warning ke saath).
-  5. `telegram_file_id` + `duration` + `title` MongoDB mein save, status
-     READY — File-Store bot isi se turant deliver karta hai, dobara kabhi
-     upload nahi hota.
-
-ENV VARS:
-  TELEGRAM_BOT_TOKEN     — file store bot ka token
-  TELEGRAM_CHAT_ID       — jis chat/channel me upload karna hai
-  TELEGRAM_BOT_USERNAME  — deep link ke liye (default: PWSENSEI_FileStoreBot)
-  TELEGRAM_LOCAL_API_URL — local Bot API server base (e.g. http://127.0.0.1:8081)
-                            Not set => remote https://api.telegram.org use hota
-                            hai (50MB upload limit — Telegram ki apni limit hai).
+  4. 480p mein convert karke persistent `recordings/` folder mein save
+     karte hain.
+  5. `duration`, `file_size` aur `title` MongoDB mein save, status
+     READY — tab hi website par "Download Now" button dikhta hai aur
+     user seedha apne browser/device par MP4 download kar sakta hai
+     (`/api/videos/<name>/download` — streamed, HTTP Range supported,
+     poora file server RAM mein load nahi hota).
 """
 
 import os
@@ -61,11 +55,6 @@ from utils.text import display_title
 
 RECORDINGS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "recordings")
 os.makedirs(RECORDINGS_DIR, exist_ok=True)
-
-BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
-BOT_USERNAME = os.environ.get("TELEGRAM_BOT_USERNAME", "PWSENSEI_FileStoreBot")
-LOCAL_API_URL = os.environ.get("TELEGRAM_LOCAL_API_URL", "")
 
 # Same header set as main.py's UPSTREAM_HEADERS — kaafi CDN edge nodes
 # generic/non-browser requests ko drop/403 kar dete hain.
@@ -248,56 +237,6 @@ def _make_480p(raw_path: str, out_path: str) -> bool:
 
 
 # ═══════════════════════════════════════════════════════════════════════
-#  Telegram upload — local Bot API server (preferred) ya remote fallback
-# ═══════════════════════════════════════════════════════════════════════
-
-def _caption_for(title: str) -> str:
-    clean = display_title(title)
-    return f"📝 Titel: {clean}\n\n📥 Upload By♠: @SmartBoy_ApnaMS"
-
-
-def _upload_to_telegram(path: str, title: str, duration):
-    """Video Telegram pe upload karke file_id return karo. None on failure."""
-    if not BOT_TOKEN or not CHAT_ID:
-        print("[recorder] TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID missing — upload skipped")
-        return None
-
-    caption = _caption_for(title)
-    base_data = {
-        "chat_id": CHAT_ID,
-        "caption": caption,
-        "supports_streaming": "true",
-    }
-    if duration:
-        base_data["duration"] = int(duration)
-
-    # Local Bot API server set hai to usi base URL pe bhejo (upload limit
-    # 50MB ki jagah 2GB) — warna normal remote Bot API. Dono cases mein
-    # NORMAL multipart upload use karte hain (files=), taaki ye chahe
-    # pw-live-proxy ke SAME container mein chal raha ho ya ek ALAG Render
-    # service ke roop mein — dono deployment tareeke se kaam kare
-    # (`--local` mode ka local-filesystem-path shortcut sirf same-machine
-    # setup mein hi valid hota hai, isliye us par depend nahi karte).
-    base_url = LOCAL_API_URL if LOCAL_API_URL else "https://api.telegram.org"
-    url = f"{base_url}/bot{BOT_TOKEN}/sendVideo"
-    try:
-        with open(path, "rb") as f:
-            r = requests.post(
-                url,
-                data=base_data,
-                files={"video": f},
-                timeout=3600,
-            )
-        data = r.json()
-        if data.get("ok"):
-            return data["result"]["video"]["file_id"]
-        print(f"[recorder] telegram upload failed ({'local' if LOCAL_API_URL else 'remote'} API): {data}")
-    except Exception as e:
-        print(f"[recorder] telegram upload error ({'local' if LOCAL_API_URL else 'remote'} API): {e}")
-    return None
-
-
-# ═══════════════════════════════════════════════════════════════════════
 #  Pipeline orchestration
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -335,13 +274,17 @@ def _run_pipeline(name: str, media_url: str, col) -> bool:
         os.replace(raw_path, out_path)  # fallback: original quality hi rakho
 
     duration = _probe_duration(out_path)
-    file_id = _upload_to_telegram(out_path, name, duration)
+    try:
+        file_size = os.path.getsize(out_path)
+    except OSError:
+        file_size = None
 
     _set(
         col, name,
         status="READY",
-        telegram_file_id=file_id,
         duration=duration,
+        file_size=file_size,
+        video_filename=os.path.basename(out_path),
         title=display_title(name),
     )
 
@@ -351,7 +294,7 @@ def _run_pipeline(name: str, media_url: str, col) -> bool:
         except OSError:
             pass
 
-    print(f"[recorder] ✅ {name} READY (duration={duration}, file_id={'yes' if file_id else 'no'})")
+    print(f"[recorder] ✅ {name} READY (duration={duration}, size={file_size})")
     return True
 
 
