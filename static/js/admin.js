@@ -51,6 +51,30 @@ const generateBtn = document.getElementById("generateBtn");
 const statusBox = document.getElementById("statusBox");
 const toast = document.getElementById("toast");
 
+// ── Source type toggle: Live stream vs Already Recorded (VOD) ──
+const modeLiveBtn = document.getElementById("modeLiveBtn");
+const modeVodBtn = document.getElementById("modeVodBtn");
+const linkLabel = document.getElementById("linkLabel");
+const modeHint = document.getElementById("modeHint");
+let sourceType = "live";
+
+function setMode(mode) {
+  sourceType = mode;
+  modeLiveBtn.classList.toggle("active", mode === "live");
+  modeVodBtn.classList.toggle("active", mode === "vod");
+  if (mode === "live") {
+    linkLabel.textContent = "PASTE ORIGINAL M3U8 LINK HERE:";
+    originalLinkInput.placeholder = "https://...index.m3u8?Signature=...";
+    modeHint.textContent = "Live stream ka index.m3u8 URL — end hote hi system khud detect karke record/process/upload karega.";
+  } else {
+    linkLabel.textContent = "PASTE RECORDED (master.m3u8 / mp4) LINK HERE:";
+    originalLinkInput.placeholder = "https://...master.m3u8 ya https://...video.mp4";
+    modeHint.textContent = "Already-recorded playable URL — seedha download+480p+Telegram upload shuru ho jaayega, live-wait ki zaroorat nahi.";
+  }
+}
+modeLiveBtn.addEventListener("click", () => setMode("live"));
+modeVodBtn.addEventListener("click", () => setMode("vod"));
+
 // Letters (any script incl. Hindi) + digits + hyphen only. No spaces, no
 // underscore, no emoji, no special characters — same rule the backend
 // applies as a safety net too.
@@ -91,7 +115,7 @@ generateForm.addEventListener("submit", async (e) => {
     const res = await fetch("/api/generate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ original_url: originalUrl, name: rawName }),
+      body: JSON.stringify({ original_url: originalUrl, name: rawName, source_type: sourceType }),
     });
     const data = await res.json();
 

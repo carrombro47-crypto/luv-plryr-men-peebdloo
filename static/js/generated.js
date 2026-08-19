@@ -23,35 +23,93 @@ document.querySelectorAll(".copy-btn").forEach((btn) => {
   });
 });
 
-// ── Force Check Now button ──────────────────────────────────────────────
-// Background watcher already automatically shuru ho chuka hota hai jaise
-// hi link generate hua tha (live end hote hi khud download+upload karega).
-// Ye button sirf ek manual "kick" hai — agar kisi wajah se watcher active
-// nahi mila (e.g. app abhi-abhi restart hua ho) to use idempotently
-// dobara ensure/start kar deta hai.
+// ── Start Recording button ──
 const recordBtn = document.getElementById("recordBtn");
 if (recordBtn) {
   recordBtn.addEventListener("click", async () => {
     const name = recordBtn.getAttribute("data-name");
     recordBtn.disabled = true;
-    recordBtn.textContent = "⏳ CHECKING…";
+    recordBtn.textContent = "⏺ STARTING…";
     try {
       const res = await fetch("/api/record/" + encodeURIComponent(name), {
         method: "POST",
       });
       const data = await res.json();
       if (data.ok) {
-        recordBtn.textContent = "✅ WATCHER ACTIVE";
-        showToast(data.note || "Watcher active hai — live end hote hi auto process hoga ✅");
+        recordBtn.textContent = "⏺ RECORDING… ✅";
+        showToast("Recording start ho gayi — live end hone par auto process hogi ✅");
       } else {
-        recordBtn.textContent = "⚡ FORCE CHECK NOW";
+        recordBtn.textContent = "⏺ START RECORDING";
         recordBtn.disabled = false;
         showToast("❌ " + (data.error || "Failed"));
       }
     } catch (err) {
-      recordBtn.textContent = "⚡ FORCE CHECK NOW";
+      recordBtn.textContent = "⏺ START RECORDING";
       recordBtn.disabled = false;
       showToast("❌ " + err.message);
     }
   });
 }
+
+// ── Retry Telegram Upload button + live status refresh ──
+// Recording/480p file already ban chuka hota hai lekin agar Telegram upload
+// fail ho gaya ho — poori class dobara record kiye bina sirf upload dobara
+// try karo. Agar recording/processing hi FAILED ho gayi thi to admin
+// "Start Recording" dobara click kar sakta hai (idempotent).
+const retryUploadBtn = document.getElementById("retryUploadBtn");
+const statusText = document.getElementById("statusText");
+
+async function refreshStatus() {
+  const name = retryUploadBtn ? retryUploadBtn.getAttribute("data-name") : null;
+  if (!name) return;
+  try {
+    const res = await fetch("/api/status/" + encodeURIComponent(name));
+    const data = await res.json();
+    if (statusText) statusText.textContent = data.status || "";
+    if (retryUploadBtn) {
+      retryUploadBtn.style.display = data.status === "UPLOAD_FAILED" ? "inline-block" : "none";
+    }
+    if (recordBtn) {
+      if (data.status === "FAILED") {
+        recordBtn.disabled = false;
+        recordBtn.textContent = "⏺ START RECORDING (retry)";
+        if (data.error) showToast("❌ Pichli koshish fail hui: " + data.error);
+      } else if (["RECORDING", "PROCESSING", "UPLOADING", "ENDING"].indexOf(data.status) !== -1) {
+        recordBtn.disabled = true;
+        recordBtn.textContent = "⏺ " + data.status + "…";
+      } else if (data.status === "READY") {
+        recordBtn.disabled = true;
+        recordBtn.textContent = "✅ READY";
+      }
+    }
+  } catch {
+    /* ignore — next poll will retry */
+  }
+}
+
+if (retryUploadBtn) {
+  retryUploadBtn.addEventListener("click", async () => {
+    const name = retryUploadBtn.getAttribute("data-name");
+    retryUploadBtn.disabled = true;
+    retryUploadBtn.textContent = "⬆ RETRYING…";
+    try {
+      const res = await fetch("/api/retry-upload/" + encodeURIComponent(name), {
+        method: "POST",
+      });
+      const data = await res.json();
+      if (data.ok) {
+        showToast("Upload dobara try ho raha hai — thodi der me status update hoga ✅");
+      } else {
+        showToast("❌ " + (data.error || "Failed"));
+      }
+    } catch (err) {
+      showToast("❌ " + err.message);
+    } finally {
+      retryUploadBtn.disabled = false;
+      retryUploadBtn.textContent = "⬆ RETRY TELEGRAM UPLOAD";
+    }
+  });
+}
+// Har 5s status check karo (recordBtn/retryUploadBtn state ke liye).
+refreshStatus();
+setInterval(refreshStatus, 5000);
