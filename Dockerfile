@@ -1,10 +1,7 @@
 FROM python:3.12.1-slim
 
-# ffmpeg + ffprobe recording pipeline ke liye zaroori hai.
-# build-essential — tgcrypto (Pyrogram ki fast MTProto crypto dependency)
-# ke liye safety net hai agar iske pre-built wheel is exact platform ke
-# liye available na ho to pip source se compile kar sake.
-RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg build-essential \
+# ffmpeg + ffprobe recording pipeline ke liye zaroori hai
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -26,4 +23,12 @@ EXPOSE 8000
 # Ab gunicorn (production WSGI server) — "gthread" worker class threads ke
 # through concurrent I/O-bound requests (jaise ye proxy) ko sahi se serve
 # karta hai. Shell form CMD taaki Render ka dynamic $PORT expand ho.
-CMD gunicorn main:flask_app --bind 0.0.0.0:$PORT --workers 2 --worker-class gthread --threads 16 --timeout 120
+#
+# IMPORTANT: sirf 1 WORKER rakha hai (jyada threads se concurrency badhayi
+# hai). Live-end auto-detection + download/upload background watcher
+# threads process-memory (`recorder.py`'s in-memory `_active` dict) mein
+# rehte hain — agar 2+ worker PROCESSES hote to har lecture ke liye har
+# worker apna alag watcher start kar deta, jisse VIDEO DUPLICATE
+# download+upload ho jaata. Single worker + zyada threads (gthread) se
+# concurrency bhi poori milti hai aur ye duplication bhi nahi hota.
+CMD gunicorn main:flask_app --bind 0.0.0.0:$PORT --workers 1 --worker-class gthread --threads 32 --timeout 120
