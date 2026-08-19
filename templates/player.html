@@ -147,7 +147,7 @@ footer { text-align:center; color:var(--muted); font-size:11.5px; padding:14px; 
         <div class="logo">▶</div>
         <div>
             <h1>PW LIVE PLAYER</h1>
-            <small>Quality Education 💎</small>
+            <small>By: MS BRO 💜</small>
         </div>
     </div>
     <div class="live-badge" id="liveBadge">
@@ -169,7 +169,7 @@ footer { text-align:center; color:var(--muted); font-size:11.5px; padding:14px; 
             <div class="seek-row">
                 <span class="time-label" id="timeLabel">00:00</span>
                 <div class="progress-wrap" id="progressWrap"><div class="progress-bar" id="progressBar"></div></div>
-                <button class="go-live" id="btnGoLive"><span class="gdot"></span>LIVE</button>
+                <button class="go-live" id="btnGoLive"><span class="gdot"></span>Go Live</button>
             </div>
             <div class="btn-row">
                 <button class="cbtn" id="btnFullscreen" title="Fullscreen">⛶</button>
@@ -179,7 +179,7 @@ footer { text-align:center; color:var(--muted); font-size:11.5px; padding:14px; 
         <!-- Overlay -->
         <div class="overlay" id="overlay">
             <div class="spinner" id="spinner"></div>
-            <div class="msg" id="overlayMsg">Live class load ho rahi hai…</div>
+            <div class="msg" id="overlayMsg">Loading Please Wait...</div>
             <div id="endedBox" style="display:none; flex-direction:column; align-items:center; gap:10px;">
                 <div class="ended-title" id="endedTitle">📺 Class Recorded</div>
                 <div class="ended-sub" id="endedSub">Live khatam ho gayi — ab aap recording dekh ya download kar sakte ho.</div>
@@ -363,7 +363,7 @@ footer { text-align:center; color:var(--muted); font-size:11.5px; padding:14px; 
                 clearLoadWatchdog();
                 video.muted = false; // default hamesha unmuted
                 video.play().catch(function () {
-                    video.muted = true; // autoplay policy fallback
+                    video.muted = false; // autoplay policy fallback
                     video.play().catch(function () {});
                 });
             });
