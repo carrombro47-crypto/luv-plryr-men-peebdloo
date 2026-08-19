@@ -56,7 +56,19 @@ main { flex:1; display:flex; flex-direction:column; align-items:center; padding:
     background:#000; border-radius:16px; overflow:hidden;
     border:1px solid var(--border); box-shadow:0 20px 60px rgba(0,0,0,.5);
 }
-#video { width:100%; height:100%; object-fit:contain; background:#000; display:block; }
+#video { width:100%; height:100%; object-fit:contain; background:#000; display:block; cursor:pointer; }
+
+/* Fullscreen: browser fullscreen element ko poori screen bhar do (landscape lock JS se handle hota hai) */
+.shell:fullscreen { max-width:none; width:100vw; height:100vh; aspect-ratio:auto; border-radius:0; }
+.shell:fullscreen #video { object-fit:contain; }
+
+/* ── Moving promo watermark ── */
+.promo-watermark {
+    position:absolute; top:20px; left:20px; z-index:12; pointer-events:none; user-select:none;
+    color:rgba(255,255,255,.42); font-weight:700; font-size:clamp(12px, 2.6vw, 17px);
+    letter-spacing:1px; transform:rotate(45deg); white-space:nowrap;
+    text-shadow:0 1px 3px rgba(0,0,0,.4); will-change:top,left;
+}
 
 /* ── Overlay (loading / ended / error) ── */
 .overlay {
@@ -83,38 +95,47 @@ main { flex:1; display:flex; flex-direction:column; align-items:center; padding:
 .big-btn:active { transform:scale(.96); }
 .big-btn.watch { background:linear-gradient(135deg, var(--accent), #8e7bff); box-shadow:0 6px 22px rgba(108,92,231,.45); }
 .big-btn.download { background:linear-gradient(135deg, #0088cc, #00c2ff); box-shadow:0 6px 22px rgba(0,150,220,.45); }
+.big-btn.retry { background:linear-gradient(135deg, #6b7280, #9ca3af); box-shadow:0 6px 22px rgba(107,114,128,.35); }
 
 /* ── Custom control bar ── */
 .controls {
     position:absolute; left:0; right:0; bottom:0; z-index:15;
-    display:flex; flex-direction:column; gap:8px; padding:10px 14px;
-    background:linear-gradient(transparent, rgba(0,0,0,.75));
+    display:flex; flex-direction:column; gap:6px; padding:10px 14px 12px;
+    background:linear-gradient(transparent, rgba(0,0,0,.8));
     opacity:0; transition:opacity .25s;
 }
 .shell:hover .controls, .controls.force-show { opacity:1; }
-.controls-top { display:flex; justify-content:flex-end; }
-.controls-bottom { display:flex; align-items:center; gap:10px; }
+
+.seek-row { display:flex; align-items:center; gap:10px; }
+.time-label { font-size:11.5px; color:#d1d5db; min-width:38px; text-align:left; flex-shrink:0; font-variant-numeric:tabular-nums; }
+.progress-wrap { flex:1; height:6px; background:rgba(255,255,255,.18); border-radius:99px; cursor:pointer; position:relative; touch-action:none; }
+.progress-wrap::before {
+    /* Bada invisible hit-area, chhoti bar pe bhi easily drag/tap ho sake */
+    content:""; position:absolute; top:-10px; bottom:-10px; left:0; right:0;
+}
+.progress-bar { height:100%; background:linear-gradient(90deg, var(--accent), var(--accent2)); border-radius:99px; width:0%; pointer-events:none; }
+
+.go-live {
+    flex-shrink:0; padding:0 14px; height:30px; border:none; border-radius:8px;
+    background:rgba(255,45,45,.9); color:#fff; font-size:11.5px; font-weight:700;
+    letter-spacing:.5px; cursor:pointer; display:flex; align-items:center; gap:6px;
+    transition:background .2s, box-shadow .2s;
+}
+.go-live:hover { background:#ff2d2d; }
+.go-live.at-live { background:rgba(255,255,255,.14); cursor:default; box-shadow:none; }
+.go-live.hidden-live { display:none; }
+.go-live .gdot { width:7px; height:7px; border-radius:50%; background:#fff; }
+.go-live.at-live .gdot { animation:none; }
+.go-live:not(.at-live) .gdot { animation:blink 1s infinite; }
+
+.btn-row { display:flex; align-items:center; justify-content:flex-end; }
 .cbtn {
     background:rgba(255,255,255,.12); border:1px solid rgba(255,255,255,.2);
-    color:#fff; border-radius:8px; width:38px; height:38px; cursor:pointer;
+    color:#fff; border-radius:8px; width:36px; height:32px; cursor:pointer;
     display:flex; align-items:center; justify-content:center; font-size:15px;
     flex-shrink:0; transition:background .2s;
 }
 .cbtn:hover { background:rgba(255,255,255,.25); }
-.progress-wrap { flex:1; height:5px; background:rgba(255,255,255,.18); border-radius:99px; cursor:pointer; position:relative; }
-.progress-bar { height:100%; background:linear-gradient(90deg, var(--accent), var(--accent2)); border-radius:99px; width:0%; }
-.time-label { font-size:11.5px; color:#d1d5db; min-width:70px; text-align:center; flex-shrink:0; }
-.go-live {
-    padding:0 14px; height:30px; border:none; border-radius:999px;
-    background:rgba(255,45,45,.92); color:#fff; font-size:11px; font-weight:700;
-    letter-spacing:1px; cursor:pointer; display:flex; align-items:center; gap:6px;
-    flex-shrink:0; transition:background .2s, box-shadow .2s;
-    box-shadow:0 4px 14px rgba(255,45,45,.4);
-}
-.go-live:hover { background:#ff2d2d; }
-.go-live.at-live { background:rgba(255,255,255,.16); box-shadow:none; }
-.go-live .gdot { width:7px; height:7px; border-radius:50%; background:#fff; animation:blink 1s infinite; }
-.go-live.at-live .gdot { animation:none; }
 
 footer { text-align:center; color:var(--muted); font-size:11.5px; padding:14px; }
 </style>
@@ -135,22 +156,22 @@ footer { text-align:center; color:var(--muted); font-size:11.5px; padding:14px; 
 </header>
 
 <main>
-    <div class="class-title" id="classTitle">{{ title }}</div>
+    <div class="class-title" id="classTitle">{{ name }}</div>
 
     <div class="shell" id="shell">
         <video id="video" playsinline></video>
 
+        <!-- Moving promo watermark — live + recorded dono me chalta hai -->
+        <div class="promo-watermark" id="promoWatermark">@PW_SENSEI</div>
+
         <!-- Custom controls -->
         <div class="controls" id="controls">
-            <div class="controls-top">
+            <div class="seek-row">
+                <span class="time-label" id="timeLabel">00:00</span>
+                <div class="progress-wrap" id="progressWrap"><div class="progress-bar" id="progressBar"></div></div>
                 <button class="go-live" id="btnGoLive"><span class="gdot"></span>LIVE</button>
             </div>
-            <div class="controls-bottom">
-                <button class="cbtn vod-only" id="btnSkipBack" title="-10s" style="display:none;">⏪</button>
-                <div class="progress-wrap" id="progressWrap"><div class="progress-bar" id="progressBar"></div></div>
-                <button class="cbtn vod-only" id="btnSkipFwd" title="+10s" style="display:none;">⏩</button>
-                <span class="time-label vod-only" id="timeLabel" style="display:none;"></span>
-                <button class="cbtn vod-only" id="btnSpeed" title="Playback speed" style="display:none; width:auto; padding:0 10px;">1x</button>
+            <div class="btn-row">
                 <button class="cbtn" id="btnFullscreen" title="Fullscreen">⛶</button>
             </div>
         </div>
@@ -160,9 +181,9 @@ footer { text-align:center; color:var(--muted); font-size:11.5px; padding:14px; 
             <div class="spinner" id="spinner"></div>
             <div class="msg" id="overlayMsg">Live class load ho rahi hai…</div>
             <div id="endedBox" style="display:none; flex-direction:column; align-items:center; gap:10px;">
-                <div class="ended-title">📺 Class Recorded</div>
-                <div class="ended-sub">Live khatam ho gayi — ab aap recording dekh ya download kar sakte ho.</div>
-                <div class="action-row">
+                <div class="ended-title" id="endedTitle">📺 Class Recorded</div>
+                <div class="ended-sub" id="endedSub">Live khatam ho gayi — ab aap recording dekh ya download kar sakte ho.</div>
+                <div class="action-row" id="endedActions">
                     <button class="big-btn watch" id="btnWatch">▶ Watch Online</button>
                     <a class="big-btn download" id="btnDownload" href="#" target="_blank" rel="noopener">⬇ Download Now</a>
                 </div>
@@ -186,15 +207,14 @@ footer { text-align:center; color:var(--muted); font-size:11.5px; padding:14px; 
     var overlayMsg = document.getElementById("overlayMsg");
     var spinner = document.getElementById("spinner");
     var endedBox = document.getElementById("endedBox");
+    var endedTitle = document.getElementById("endedTitle");
+    var endedSub = document.getElementById("endedSub");
+    var endedActions = document.getElementById("endedActions");
     var btnWatch = document.getElementById("btnWatch");
     var btnDownload = document.getElementById("btnDownload");
     var liveBadge = document.getElementById("liveBadge");
-    var controls = document.getElementById("controls");
     var btnFullscreen = document.getElementById("btnFullscreen");
     var btnGoLive = document.getElementById("btnGoLive");
-    var btnSkipBack = document.getElementById("btnSkipBack");
-    var btnSkipFwd = document.getElementById("btnSkipFwd");
-    var btnSpeed = document.getElementById("btnSpeed");
     var progressBar = document.getElementById("progressBar");
     var progressWrap = document.getElementById("progressWrap");
     var timeLabel = document.getElementById("timeLabel");
@@ -204,12 +224,9 @@ footer { text-align:center; color:var(--muted); font-size:11.5px; padding:14px; 
     var statusPoller = null;
 
     // Tracks whether playback has EVER actually started for this stream.
-    // Needed to tell apart "stream never came up at all" (real failure —
-    // should show an error) from "was playing fine, then errored near the
-    // live edge" (probably the live class just ended).
     var manifestEverLoaded = false;
     var loadWatchdog = null;
-    var LOAD_WATCHDOG_MS = 20000; // agar 20s me stream start na ho to error dikhao
+    var LOAD_WATCHDOG_MS = 20000;
 
     function clearLoadWatchdog() {
         if (loadWatchdog) { clearTimeout(loadWatchdog); loadWatchdog = null; }
@@ -235,6 +252,8 @@ footer { text-align:center; color:var(--muted); font-size:11.5px; padding:14px; 
     function showError(msg) {
         overlay.classList.remove("hidden");
         spinner.style.display = "none";
+        endedBox.style.display = "none";
+        overlayMsg.style.display = "block";
         overlayMsg.textContent = "✕ " + msg;
         overlayMsg.className = "msg error";
     }
@@ -245,57 +264,69 @@ footer { text-align:center; color:var(--muted); font-size:11.5px; padding:14px; 
         spinner.style.display = "none";
         overlayMsg.style.display = "none";
         endedBox.style.display = "flex";
-        btnDownload.href = st.download_url;
+        endedTitle.textContent = "📺 Class Recorded";
+        endedActions.style.display = "flex";
+        btnWatch.style.display = "";
+
+        if (st.download_url) {
+            btnDownload.style.display = "";
+            btnDownload.href = st.download_url;
+            endedSub.textContent = "Live khatam ho gayi — ab aap recording dekh ya download kar sakte ho.";
+        } else {
+            btnDownload.style.display = "none";
+            endedSub.textContent = "Live khatam ho gayi — Watch Online available hai. Download thodi der me ready hoga.";
+        }
+
         btnWatch.onclick = function () {
-            // Watch Online — same player, recorded mp4 (seek/speed/skip enabled)
             overlay.classList.add("hidden");
             liveBadge.classList.remove("show");
             isLive = false;
-            btnGoLive.style.display = "none";
-            document.querySelectorAll(".vod-only").forEach(function (el) {
-                el.style.display = "";
-            });
+            btnGoLive.classList.add("hidden-live");
             if (hls) { hls.destroy(); hls = null; }
             video.src = st.watch_url;
             video.muted = false;
-            video.playbackRate = 1;
-            btnSpeed.textContent = "1x";
             video.play().catch(function () {});
         };
     }
 
-    // ─────────── Speed control (VOD only) ───────────
-    var SPEEDS = [0.5, 1, 1.25, 1.5, 2];
-    btnSpeed.addEventListener("click", function () {
-        if (isLive) return;
-        var idx = SPEEDS.indexOf(video.playbackRate);
-        var next = SPEEDS[(idx + 1 + SPEEDS.length) % SPEEDS.length] || 1;
-        video.playbackRate = next;
-        btnSpeed.textContent = next + "x";
-    });
+    function messageForStatus(status) {
+        switch (status) {
+            case "RECORDING": return "Live abhi khatam hui hai — recording finalize ho rahi hai…";
+            case "ENDING": return "Recording finalize ho rahi hai…";
+            case "PROCESSING": return "480p video taiyar ho raha hai…";
+            case "UPLOADING": return "Telegram pe upload ho raha hai…";
+            default: return "Recording taiyar ho rahi hai…";
+        }
+    }
 
-    // ─────────── Skip ±10s (VOD only) ───────────
-    btnSkipBack.addEventListener("click", function () {
-        if (isLive || !video.duration) return;
-        video.currentTime = Math.max(0, video.currentTime - 10);
-    });
-    btnSkipFwd.addEventListener("click", function () {
-        if (isLive || !video.duration) return;
-        video.currentTime = Math.min(video.duration, video.currentTime + 10);
-    });
+    function showFailed(st) {
+        overlay.classList.remove("hidden");
+        spinner.style.display = "none";
+        endedBox.style.display = "none";
+        overlayMsg.style.display = "block";
+        overlayMsg.className = "msg error";
+        overlayMsg.textContent = "✕ Processing fail ho gayi" + (st.error ? (": " + st.error) : "") + " — admin se contact karo.";
+    }
 
-    // ─────────── Status polling (live end detection) ───────────
+    // ─────────── Status polling (live end detection + processing states) ───────────
     function startStatusPolling() {
         if (statusPoller) return;
         statusPoller = setInterval(function () {
             fetch("/api/status/" + encodeURIComponent(NAME))
                 .then(function (r) { return r.json(); })
                 .then(function (st) {
-                    if (st.status === "READY") {
+                    if (st.status === "READY" || st.status === "UPLOAD_FAILED") {
                         clearInterval(statusPoller);
                         statusPoller = null;
                         if (hls) { hls.destroy(); hls = null; }
                         showEnded(st);
+                    } else if (st.status === "FAILED") {
+                        clearInterval(statusPoller);
+                        statusPoller = null;
+                        if (hls) { hls.destroy(); hls = null; }
+                        showFailed(st);
+                    } else if (["RECORDING", "ENDING", "PROCESSING", "UPLOADING"].indexOf(st.status) !== -1) {
+                        showLoading(messageForStatus(st.status));
                     }
                 })
                 .catch(function () {});
@@ -330,14 +361,13 @@ footer { text-align:center; color:var(--muted); font-size:11.5px; padding:14px; 
             hls.on(Hls.Events.MANIFEST_PARSED, function () {
                 manifestEverLoaded = true;
                 clearLoadWatchdog();
-                video.muted = false;
+                video.muted = false; // default hamesha unmuted
                 video.play().catch(function () {
                     video.muted = true; // autoplay policy fallback
                     video.play().catch(function () {});
                 });
             });
 
-            // Playlist mein ENDLIST aa gaya → live khatam
             hls.on(Hls.Events.LEVEL_LOADED, function (_, data) {
                 if (data.details && data.details.live === false) {
                     startStatusPolling();
@@ -348,12 +378,6 @@ footer { text-align:center; color:var(--muted); font-size:11.5px; padding:14px; 
                 if (!data.fatal) return;
 
                 if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
-                    // Use hls.js's own error "details" (matches the reference
-                    // proxy's logic) instead of guessing — this is precise:
-                    // manifestLoadError/manifestLoadTimeOut/manifestParsingError
-                    // mean the playlist itself never came up even once (dead
-                    // link, proxy 502, upstream down) — no point silently
-                    // retrying forever, show a clear error immediately.
                     var neverStarted =
                         data.details === "manifestLoadError" ||
                         data.details === "manifestLoadTimeOut" ||
@@ -363,12 +387,8 @@ footer { text-align:center; color:var(--muted); font-size:11.5px; padding:14px; 
                         showError("Stream load nahi ho paya — link expire ho gaya ya server down hai. Thodi der baad refresh karo.");
                         return;
                     }
-                    if (!manifestEverLoaded) {
-                        // Some other network error before first successful
-                        // load — let hls.js's own retry policy handle it,
-                        // don't manually reset the retry cycle.
-                        return;
-                    }
+                    if (!manifestEverLoaded) return;
+
                     // Playback had already started once — a network error here
                     // near the live edge usually means the live class just ended.
                     startStatusPolling();
@@ -390,6 +410,7 @@ footer { text-align:center; color:var(--muted); font-size:11.5px; padding:14px; 
             video.addEventListener("loadedmetadata", function () {
                 manifestEverLoaded = true;
                 clearLoadWatchdog();
+                video.muted = false;
                 video.play().catch(function () {});
             });
         } else {
@@ -408,32 +429,46 @@ footer { text-align:center; color:var(--muted); font-size:11.5px; padding:14px; 
         if (video.getAttribute("src")) showError("Video error — refresh karke try karo.");
     });
 
-    // Live class ki speed hamesha 1x — kisi bhi tarah (native context menu,
-    // keyboard shortcut, etc.) se change ho jaaye to turant wapas 1x kar do.
+    // Live class ki speed hamesha 1x.
     video.addEventListener("ratechange", function () {
         if (isLive && video.playbackRate !== 1) video.playbackRate = 1;
     });
 
-    // ─────────── Tap-to-play/pause (video par seedha tap — professional
-    // style, koi persistent pause button nahi) ───────────
+    // ─────────── Tap-to-toggle play/pause (dedicated pause button hataya —
+    // ab professional players jaisa: video pe single tap = pause/play) ───
     video.addEventListener("click", function () {
-        video.muted = false; // pehle tap par hi unmute (agar autoplay policy ki wajah se mute tha)
-        if (video.paused) video.play().catch(function () {});
-        else video.pause();
+        if (video.paused) video.play(); else video.pause();
     });
 
-    // ─────────── Custom controls ───────────
+    // Video hamesha unmuted start hota hai (dedicated mute button hataya —
+    // volume control device ka apna hi use karega).
+    video.muted = false;
+
+    // ─────────── Fullscreen → force landscape orientation ───────────
+    function lockLandscape() {
+        if (screen.orientation && screen.orientation.lock) {
+            screen.orientation.lock("landscape").catch(function () {});
+        }
+    }
+    function unlockOrientation() {
+        if (screen.orientation && screen.orientation.unlock) {
+            try { screen.orientation.unlock(); } catch (e) {}
+        }
+    }
     btnFullscreen.addEventListener("click", function () {
         if (document.fullscreenElement) {
             document.exitFullscreen();
         } else if (shell.requestFullscreen) {
-            shell.requestFullscreen();
+            shell.requestFullscreen().then(lockLandscape).catch(function () {});
         } else if (video.webkitEnterFullscreen) {
             video.webkitEnterFullscreen(); // iOS Safari
         }
     });
+    document.addEventListener("fullscreenchange", function () {
+        if (!document.fullscreenElement) unlockOrientation();
+    });
 
-    // Go Live — live edge pe jump
+    // ─────────── Go Live — DVR edge pe jump ───────────
     function updateGoLiveState() {
         if (!isLive) return;
         var atLive = false;
@@ -453,7 +488,13 @@ footer { text-align:center; color:var(--muted); font-size:11.5px; padding:14px; 
         }
     });
 
-    // Progress bar (recorded mode mein seek, live mode mein buffer position)
+    // ─────────── Progress bar — seekable DVR window (live) + full seek (recorded) ───────────
+    function fmt(s) {
+        s = Math.floor(s || 0);
+        var h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+        return (h ? h + ":" : "") + String(m).padStart(2, "0") + ":" + String(sec).padStart(2, "0");
+    }
+
     setInterval(function () {
         try {
             if (isLive) {
@@ -463,34 +504,79 @@ footer { text-align:center; color:var(--muted); font-size:11.5px; padding:14px; 
                     var pct = end > start ? ((video.currentTime - start) / (end - start)) * 100 : 0;
                     progressBar.style.width = Math.min(100, Math.max(0, pct)) + "%";
                 }
+                timeLabel.textContent = fmt(video.currentTime);
                 updateGoLiveState();
             } else if (video.duration) {
                 progressBar.style.width = (video.currentTime / video.duration) * 100 + "%";
-                timeLabel.textContent = fmt(video.currentTime) + " / " + fmt(video.duration);
+                timeLabel.textContent = fmt(video.currentTime);
             }
         } catch (e) {}
     }, 500);
 
-    function fmt(s) {
-        s = Math.floor(s || 0);
-        var h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
-        return (h ? h + ":" : "") + String(m).padStart(2, "0") + ":" + String(sec).padStart(2, "0");
-    }
-
-    progressWrap.addEventListener("click", function (e) {
-        if (isLive) return; // live mein seek mat karo — Go Live use karo
-        if (!video.duration) return;
+    // Click ya drag dono se seek ho — live DVR window ke andar bhi, recorded
+    // video me bhi. "Go Live" hamesha live edge pe direct jump ke liye hai.
+    var seeking = false;
+    function seekAtClientX(clientX) {
         var rect = progressWrap.getBoundingClientRect();
-        video.currentTime = ((e.clientX - rect.left) / rect.width) * video.duration;
+        var pct = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
+        if (isLive) {
+            if (video.seekable.length) {
+                var start = video.seekable.start(0);
+                var end = video.seekable.end(video.seekable.length - 1);
+                video.currentTime = start + pct * (end - start);
+            }
+        } else if (video.duration) {
+            video.currentTime = pct * video.duration;
+        }
+    }
+    progressWrap.addEventListener("pointerdown", function (e) {
+        seeking = true;
+        seekAtClientX(e.clientX);
     });
+    window.addEventListener("pointermove", function (e) {
+        if (seeking) seekAtClientX(e.clientX);
+    });
+    window.addEventListener("pointerup", function () { seeking = false; });
+
+    // ─────────── Moving promo watermark (DVD-bounce style diagonal) ───────────
+    (function () {
+        var el = document.getElementById("promoWatermark");
+        var x = 16, y = 16, dx = 0.55, dy = 0.38;
+        function step() {
+            var maxX = Math.max(0, shell.clientWidth - el.offsetWidth);
+            var maxY = Math.max(0, shell.clientHeight - el.offsetHeight);
+            x += dx; y += dy;
+            if (x <= 0 || x >= maxX) { dx *= -1; x = Math.min(maxX, Math.max(0, x)); }
+            if (y <= 0 || y >= maxY) { dy *= -1; y = Math.min(maxY, Math.max(0, y)); }
+            el.style.left = x + "px";
+            el.style.top = y + "px";
+            requestAnimationFrame(step);
+        }
+        requestAnimationFrame(step);
+    })();
 
     // ─────────── Boot ───────────
-    if (INITIAL_STATUS === "READY") {
-        // Pehle se recorded hai — seedha 2 options dikhao
+    var TERMINAL_STATUSES = ["READY", "UPLOAD_FAILED", "FAILED"];
+    var PROCESSING_STATUSES = ["RECORDING", "ENDING", "PROCESSING", "UPLOADING"];
+
+    if (TERMINAL_STATUSES.indexOf(INITIAL_STATUS) !== -1) {
         fetch("/api/status/" + encodeURIComponent(NAME))
             .then(function (r) { return r.json(); })
-            .then(function (st) { if (st.status === "READY") showEnded(st); else startLive(); })
+            .then(function (st) {
+                if (st.status === "READY" || st.status === "UPLOAD_FAILED") showEnded(st);
+                else if (st.status === "FAILED") showFailed(st);
+                else if (PROCESSING_STATUSES.indexOf(st.status) !== -1) {
+                    showLoading(messageForStatus(st.status));
+                    startStatusPolling();
+                } else startLive();
+            })
             .catch(function () { startLive(); });
+    } else if (PROCESSING_STATUSES.indexOf(INITIAL_STATUS) !== -1) {
+        // Live already khatam ho chuki hai, pipeline chal rahi hai — is
+        // waqt source URL par HLS play karne ki koshish mat karo (voh
+        // expire ho chuka ho sakta hai), seedha processing status poll karo.
+        showLoading(messageForStatus(INITIAL_STATUS));
+        startStatusPolling();
     } else {
         startLive();
     }

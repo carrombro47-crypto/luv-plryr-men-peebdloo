@@ -5,6 +5,15 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>PW LIVE LINK GENERATOR</title>
 <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+<style>
+.source-toggle { display:flex; gap:8px; margin-bottom:6px; }
+.toggle-btn {
+  flex:1; padding:10px 8px; border-radius:8px; border:1px solid rgba(255,255,255,.18);
+  background:rgba(255,255,255,.04); color:#c9cdd6; font-size:12.5px; font-weight:600;
+  cursor:pointer; transition:background .2s, border-color .2s, color .2s;
+}
+.toggle-btn.active { background:rgba(108,92,231,.25); border-color:#6c5ce7; color:#fff; }
+</style>
 </head>
 <body>
 
@@ -41,8 +50,15 @@
         <p class="subtitle">Original m3u8 link paste karo, class name do, live link generate karo.</p>
 
         <form id="generateForm">
-          <label class="gate-label" for="originalLinkInput">PASTE ORIGINAL M3U8 LINK HERE:</label>
+          <label class="gate-label">SOURCE TYPE:</label>
+          <div class="source-toggle" id="sourceToggle">
+            <button type="button" class="toggle-btn active" id="modeLiveBtn" data-mode="live">🔴 Live Stream (index.m3u8)</button>
+            <button type="button" class="toggle-btn" id="modeVodBtn" data-mode="vod">📼 Already Recorded (master.m3u8 / mp4)</button>
+          </div>
+
+          <label class="gate-label" for="originalLinkInput" id="linkLabel">PASTE ORIGINAL M3U8 LINK HERE:</label>
           <input type="text" id="originalLinkInput" class="login-input" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="https://...index.m3u8?Signature=...">
+          <p class="name-hint" id="modeHint">Live stream ka index.m3u8 URL — end hote hi system khud detect karke record/process/upload karega.</p>
 
           <label class="gate-label" for="lectureNameInput">CLASS NAME:</label>
           <input type="text" id="lectureNameInput" class="login-input" maxlength="100" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="e.g. गणितीय-उपकरण-04 या Units-and-Measurements-03">
