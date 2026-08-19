@@ -65,7 +65,7 @@ main { flex:1; display:flex; flex-direction:column; align-items:center; padding:
 /* ── Moving promo watermark ── */
 .promo-watermark {
     position:absolute; top:20px; left:20px; z-index:12; pointer-events:none; user-select:none;
-    color:rgba(255,255,255,.42); font-weight:700; font-size:clamp(12px, 2.6vw, 17px);
+    color:rgba(255,255,255,.20); font-weight:700; font-size:clamp(12px, 2.6vw, 11px);
     letter-spacing:1px; transform:rotate(45deg); white-space:nowrap;
     text-shadow:0 1px 3px rgba(0,0,0,.4); will-change:top,left;
 }
@@ -146,8 +146,8 @@ footer { text-align:center; color:var(--muted); font-size:11.5px; padding:14px; 
     <div class="brand">
         <div class="logo">▶</div>
         <div>
-            <h1>PW LIVE PLAYER</h1>
-            <small>Quality Education 💎</small>
+            <h1>NAWAAB LIVE PLAYER</h1>
+            <small>Premium Server💎</small>
         </div>
     </div>
     <div class="live-badge" id="liveBadge">
@@ -169,7 +169,7 @@ footer { text-align:center; color:var(--muted); font-size:11.5px; padding:14px; 
             <div class="seek-row">
                 <span class="time-label" id="timeLabel">00:00</span>
                 <div class="progress-wrap" id="progressWrap"><div class="progress-bar" id="progressBar"></div></div>
-                <button class="go-live" id="btnGoLive"><span class="gdot"></span>LIVE</button>
+                <button class="go-live" id="btnGoLive"><span class="gdot"></span>Go Live</button>
             </div>
             <div class="btn-row">
                 <button class="cbtn" id="btnFullscreen" title="Fullscreen">⛶</button>
@@ -179,7 +179,7 @@ footer { text-align:center; color:var(--muted); font-size:11.5px; padding:14px; 
         <!-- Overlay -->
         <div class="overlay" id="overlay">
             <div class="spinner" id="spinner"></div>
-            <div class="msg" id="overlayMsg">Live class load ho rahi hai…</div>
+            <div class="msg" id="overlayMsg">Loading Please Wait…</div>
             <div id="endedBox" style="display:none; flex-direction:column; align-items:center; gap:10px;">
                 <div class="ended-title" id="endedTitle">📺 Class Recorded</div>
                 <div class="ended-sub" id="endedSub">Live khatam ho gayi — ab aap recording dekh ya download kar sakte ho.</div>
@@ -295,7 +295,7 @@ footer { text-align:center; color:var(--muted); font-size:11.5px; padding:14px; 
             case "ENDING": return "Recording finalize ho rahi hai…";
             case "PROCESSING": return "480p video taiyar ho raha hai…";
             case "UPLOADING": return "Telegram pe upload ho raha hai…";
-            default: return "Recording taiyar ho rahi hai…";
+            default: return "Final Recording taiyar ho rahi hai…";
         }
     }
 
