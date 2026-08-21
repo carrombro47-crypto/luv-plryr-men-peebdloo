@@ -1,10 +1,12 @@
 import base64
+import json
 import re
 import time
 from urllib.parse import urljoin, urlparse, parse_qsl, urlencode, urlunparse
 
 import os
 import requests
+from requests.adapters import HTTPAdapter, Retry
 from flask import Flask, request, jsonify, Response, render_template
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -14,25 +16,58 @@ from flask import Flask, request, jsonify, Response, render_template
 
 flask_app = Flask(__name__)
 
+# Vercel's Python builder specifically looks for a top-level variable named
+# `app` (that's the "does not define a top-level 'app' Flask instance"
+# error). `flask_app` stays as-is too, so the existing gunicorn command /
+# Render Docker deploy are completely unaffected.
+app = flask_app
+
+# Headers overridable via env vars (no redeploy needed if PW's CDN starts
+# requiring a different Referer/Origin/User-Agent — just set the env var
+# on Render/Vercel).
 UPSTREAM_HEADERS = {
-    "User-Agent": (
+    "User-Agent": os.environ.get(
+        "PWLIVE_USER_AGENT",
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+        "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
     ),
     "Accept": "*/*",
     "Accept-Language": "en-US,en;q=0.9",
-    "Referer": "https://www.pw.live/",
-    "Origin": "https://www.pw.live",
-    # sec-ch-ua / client-hints — kuch CDN edge nodes bina in headers ke bhi
-    # requests ko "non-browser" maan ke drop/slow kar dete hain.
+    "Accept-Encoding": "gzip, deflate, br",
+    "Referer": os.environ.get("PWLIVE_REFERER", "https://www.pw.live/"),
+    "Origin": os.environ.get("PWLIVE_ORIGIN", "https://www.pw.live"),
+    "Connection": "keep-alive",
+    "DNT": "1",
+    # sec-ch-ua / sec-fetch-* — kuch CDN edge nodes / WAFs bina in headers
+    # ke bhi requests ko "non-browser" maan ke drop/slow/block kar dete hain.
     "sec-ch-ua": '"Chromium";v="126", "Not_A Brand";v="8"',
     "sec-ch-ua-mobile": "?0",
     "sec-ch-ua-platform": '"Windows"',
+    "Sec-Fetch-Dest": "empty",
+    "Sec-Fetch-Mode": "cors",
+    "Sec-Fetch-Site": "cross-site",
 }
 
 AUTH_PARAMS = {"signature", "policy", "key-pair-id", "expires", "start", "session-id"}
 UPSTREAM_TIMEOUT = 15
 UPSTREAM_MAX_RETRIES = 2  # transient CDN edge hiccups ke liye
+
+# Shared session — connection pooling (much faster than a fresh TCP+TLS
+# handshake per segment) + an HTTP-level Retry adapter for connection
+# resets/timeouts. 4xx (incl. 403) is NEVER retried at this layer — that's
+# a definitive CDN decision (expired/invalid signature, blocked, etc.),
+# retrying it only wastes time.
+_session = requests.Session()
+_retry = Retry(
+    total=UPSTREAM_MAX_RETRIES,
+    backoff_factor=0.3,
+    status_forcelist=[500, 502, 503, 504],
+    allowed_methods=["GET", "HEAD"],
+    raise_on_status=False,
+)
+_adapter = HTTPAdapter(max_retries=_retry, pool_connections=20, pool_maxsize=20)
+_session.mount("https://", _adapter)
+_session.mount("http://", _adapter)
 
 
 @flask_app.after_request
@@ -74,14 +109,80 @@ def _inherit_auth_params(seg_url: str, playlist_url: str) -> str:
         return seg_url
 
 
+def _cf_b64decode(s: str) -> bytes:
+    """CloudFront's URL-safe base64 variant: + -> -, = -> _, / -> ~."""
+    s = s.replace("-", "+").replace("_", "=").replace("~", "/")
+    pad = len(s) % 4
+    if pad:
+        s += "=" * (4 - pad)
+    return base64.b64decode(s)
+
+
+def _check_signed_url_expiry(url: str):
+    """CloudFront signed URLs (jaisa PW live/CDN links) carry a base64
+    'Policy' param with DateLessThan/DateGreaterThan epoch times. Decode
+    it up front so an expired link fails FAST with a clear, actionable
+    message instead of a confusing bare 403 from the CDN — saves a round
+    trip too. Returns an error string if expired/not-yet-valid, else None."""
+    try:
+        q = dict(parse_qsl(urlparse(url).query))
+        policy_b64 = q.get("Policy")
+        if not policy_b64:
+            return None
+        policy = json.loads(_cf_b64decode(policy_b64))
+        cond = policy["Statement"][0]["Condition"]
+        now = int(time.time())
+        less_than = cond.get("DateLessThan", {}).get("AWS:EpochTime")
+        greater_than = cond.get("DateGreaterThan", {}).get("AWS:EpochTime")
+        if less_than and now > int(less_than):
+            return (
+                f"Signed link expired {now - int(less_than)}s ago — "
+                "generate a fresh index.m3u8 link."
+            )
+        if greater_than and now < int(greater_than):
+            return "This signed link isn't valid yet (starts in the future)."
+    except Exception:
+        pass  # policy shape ajeeb ho to bas skip — upstream khud decide karega
+    return None
+
+
+def _extract_upstream_error_detail(r):
+    """CloudFront/S3 error responses are a small XML body with a <Message>
+    (and <Code>) explaining EXACTLY why — expired/invalid signature,
+    missing param, access denied by policy, etc. Surface that instead of
+    a bare status code so a 403 is actually actionable, not a guess."""
+    try:
+        text = (r.text or "")[:2000].strip()
+        if not text.startswith("<"):
+            return None
+        code = re.search(r"<Code>(.*?)</Code>", text, re.IGNORECASE | re.DOTALL)
+        message = re.search(r"<Message>(.*?)</Message>", text, re.IGNORECASE | re.DOTALL)
+        parts = [m.group(1).strip() for m in (code, message) if m]
+        return " — ".join(parts) if parts else None
+    except Exception:
+        return None
+
+
+def _error_response(r):
+    """Uniform error JSON across all three routes: status + CDN's real
+    reason when we can extract one."""
+    body = {"error": f"Upstream failed: {r.status_code}"}
+    detail = _extract_upstream_error_detail(r)
+    if detail:
+        body["detail"] = detail
+    return jsonify(body), r.status_code
+
+
 def _fetch_upstream(url: str):
     """
-    Upstream fetch with retry + backoff.
+    Upstream fetch with retry + backoff, over a pooled session.
       - 2xx aur 4xx dono FINAL maane jaate hain (4xx retry karne se theek
         nahi hoga — e.g. expired signed URL — retry sirf time waste karta
         hai aur player ko zyada der "loading" pe atka deta hai).
       - Sirf 5xx / connection-level errors (timeout, DNS, reset — transient
-        CDN edge hiccups) retry hote hain, chhoti backoff ke saath.
+        CDN edge hiccups) retry hote hain, chhoti backoff ke saath (session
+        ka Retry adapter yeh already handle karta hai; yeh loop upar se ek
+        aur application-level safety net hai).
     """
     headers = dict(UPSTREAM_HEADERS)
     if request.headers.get("Range"):
@@ -90,7 +191,7 @@ def _fetch_upstream(url: str):
     last_exc = None
     for attempt in range(UPSTREAM_MAX_RETRIES + 1):
         try:
-            r = requests.get(
+            r = _session.get(
                 url, headers=headers, timeout=UPSTREAM_TIMEOUT, allow_redirects=True
             )
             if r.ok or (400 <= r.status_code < 500):
@@ -181,12 +282,16 @@ def api_pwlive_player():
     if not url:
         return jsonify({"error": "URL missing"}), 400
 
+    expiry_error = _check_signed_url_expiry(url)
+    if expiry_error:
+        return jsonify({"error": "Link expired", "detail": expiry_error}), 400
+
     try:
         r = _fetch_upstream(url)
     except requests.RequestException as e:
         return jsonify({"error": f"Upstream error: {e}"}), 502
     if not r.ok:
-        return jsonify({"error": f"Upstream failed: {r.status_code}"}), r.status_code
+        return _error_response(r)
 
     body = _rewrite_for_player(r.text, url)
     return Response(
@@ -203,12 +308,16 @@ def api_pwlive_download():
     if not url:
         return jsonify({"error": "URL missing"}), 400
 
+    expiry_error = _check_signed_url_expiry(url)
+    if expiry_error:
+        return jsonify({"error": "Link expired", "detail": expiry_error}), 400
+
     try:
         r = _fetch_upstream(url)
     except requests.RequestException as e:
         return jsonify({"error": f"Upstream error: {e}"}), 502
     if not r.ok:
-        return jsonify({"error": f"Upstream failed: {r.status_code}"}), r.status_code
+        return _error_response(r)
 
     body = _rewrite_for_download(r.text, url)
     return Response(
@@ -235,12 +344,16 @@ def api_pwlive_seg():
     except Exception:
         return jsonify({"error": "Invalid segment token"}), 400
 
+    expiry_error = _check_signed_url_expiry(url)
+    if expiry_error:
+        return jsonify({"error": "Link expired", "detail": expiry_error}), 400
+
     try:
         r = _fetch_upstream(url)
     except requests.RequestException as e:
         return jsonify({"error": f"Upstream error: {e}"}), 502
     if not r.ok:
-        return jsonify({"error": f"Upstream failed: {r.status_code}"}), r.status_code
+        return _error_response(r)
 
     ctype = (r.headers.get("Content-Type") or "").lower()
     if "mpegurl" in ctype or "m3u8" in ctype or parsed.path.lower().endswith(".m3u8"):
