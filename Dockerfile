@@ -2,11 +2,6 @@ FROM python:3.12.1-slim-bookworm
 
 WORKDIR /app
 
-# FFmpeg — recording/transcoding ke liye required
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ffmpeg \
-    && rm -rf /var/lib/apt/lists/*
-
 # pip update
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel
 

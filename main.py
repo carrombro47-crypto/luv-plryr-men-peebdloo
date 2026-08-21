@@ -1,59 +1,18 @@
 import base64
-import os
 import re
-import threading
 import time
-import unicodedata
-import functools
-from datetime import datetime, timedelta
-from urllib.parse import urljoin, urlparse, parse_qsl, urlencode, urlunparse, quote
+from urllib.parse import urljoin, urlparse, parse_qsl, urlencode, urlunparse
 
+import os
 import requests
-from flask import (
-    Flask, render_template, request, jsonify, redirect, url_for,
-    session, Response, send_from_directory,
-)
+from flask import Flask, request, jsonify, Response, render_template
 
-from utils.db import get_db
-from utils.text import display_title
-from recorder import start_recording, resume_pending
+# ═══════════════════════════════════════════════════════════════════════════
+#  PW Live Proxy — simple, stateless. No login, no MongoDB, no file store,
+#  no bot. Every route is driven only by the ?url= you pass in.
+# ═══════════════════════════════════════════════════════════════════════════
 
-# ─── Configuration ──────────────────────────────────────────────────────────
-# Public domain used in every generated link. ONLY line to edit if this
-# service's Render domain ever changes.
-PUBLIC_BASE_URL = os.environ.get(
-    "PUBLIC_BASE_URL", "https://luv-plryr-men-peebdloo.onrender.com"
-)
-
-# ─── Server-side Admin Auth (keys never reach the browser) ────────────────
-OWNER_NAME = os.environ.get("OWNER_NAME", "ViPvxMS10BRO")
-ADMIN_KEYS = ["MS#Admin_R4!xQ8Lp7", "Core$MS_N6v!T2Zk9", "mS@Root_P8#Lm5Qx3"]
-VIP_KEYS = ["ToXic#ViPR8m!4QxL7", "tOxic@VipN5v!9ZpK2", "ToXic$ViPX7#rT3Lm8"]
-
-RECORDINGS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "recordings")
-os.makedirs(RECORDINGS_DIR, exist_ok=True)
-
-# ─── Flask app ──────────────────────────────────────────────────────────────
 flask_app = Flask(__name__)
-flask_app.secret_key = os.environ.get(
-    "SECRET_KEY",
-    "c7c8d55d9d8b4a3c2f71b1f5f79c8ea84e8d2c7c3a4b51d70b91ef0fdad5f2f6f13e9a7b8c6d1e24f4a8e9c0b5d3a7f6d8e2c1b9a4f7d5e8c3a6b1d0f9e2c7",
-)
-flask_app.config["SESSION_COOKIE_HTTPONLY"] = True
-flask_app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
-flask_app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(hours=12)
-
-db = get_db()
-lectures_col = db["lectures"]
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-#  HLS PROXY (stream.js logic, ported to Python)
-#  - Full CORS on EVERY response (success + error + preflight)
-#  - Case-insensitive m3u8 content-type detection
-#  - CloudFront signed-URL auth params inherited onto segments
-#  - Original URL NEVER reaches the browser (base64 opaque tokens)
-# ═══════════════════════════════════════════════════════════════════════════
 
 UPSTREAM_HEADERS = {
     "User-Agent": (
@@ -87,6 +46,8 @@ def add_cors_headers(resp):
     return resp
 
 
+# ── base64 opaque tokens for the player-mode segment proxy ─────────────────
+
 def _b64e(s: str) -> str:
     return base64.urlsafe_b64encode(s.encode()).decode().rstrip("=")
 
@@ -113,48 +74,14 @@ def _inherit_auth_params(seg_url: str, playlist_url: str) -> str:
         return seg_url
 
 
-def _rewrite_m3u8(body: str, playlist_url: str, name: str) -> str:
-    """Playlist ke saare URLs ko proxy tokens se replace karo."""
-    base = request.host_url.rstrip("/")
-
-    def tok(raw: str) -> str:
-        absolute = urljoin(playlist_url, raw.strip())
-        absolute = _inherit_auth_params(absolute, playlist_url)
-        return f"{base}/api/live/{quote(name)}/seg?u={_b64e(absolute)}"
-
-    out_lines = []
-    for line in body.splitlines():
-        t = line.strip()
-        if not t:
-            out_lines.append(line)
-            continue
-        if t.startswith("#"):
-            if "URI=" in t:
-                line = re.sub(
-                    r'URI="([^"]+)"',
-                    lambda m: f'URI="{tok(m.group(1))}"',
-                    line,
-                    flags=re.IGNORECASE,
-                )
-            out_lines.append(line)
-            continue
-        out_lines.append(tok(t))
-    return "\n".join(out_lines) + "\n"
-
-
 def _fetch_upstream(url: str):
     """
-    Upstream fetch with retry + backoff — ported from the reference
-    stream.js proxy logic:
+    Upstream fetch with retry + backoff.
       - 2xx aur 4xx dono FINAL maane jaate hain (4xx retry karne se theek
         nahi hoga — e.g. expired signed URL — retry sirf time waste karta
         hai aur player ko zyada der "loading" pe atka deta hai).
       - Sirf 5xx / connection-level errors (timeout, DNS, reset — transient
         CDN edge hiccups) retry hote hain, chhoti backoff ke saath.
-    Pehle sirf EK attempt tha (koi retry nahi) — isliye ek chhota transient
-    upstream glitch turant hi player ko fatal error de deta tha, jo live
-    stream ke case me bahut common hai. Ye hi "live nahi chal raha" ke
-    symptoms ka ek bada part tha.
     """
     headers = dict(UPSTREAM_HEADERS)
     if request.headers.get("Range"):
@@ -176,20 +103,92 @@ def _fetch_upstream(url: str):
     raise last_exc
 
 
-@flask_app.route("/api/live/<name>/playlist")
-def live_playlist(name):
-    """Master/media playlist — original URL DB se aati hai, browser kabhi nahi dekhta."""
-    doc = lectures_col.find_one({"_id": name})
-    if not doc:
-        return jsonify({"error": "Stream not found"}), 404
+def _rewrite_lines(body: str, playlist_url: str, tok):
+    """Shared line-walker — playlist ke har URL line/URI= attr ko tok() se replace karo."""
+    out_lines = []
+    for line in body.splitlines():
+        t = line.strip()
+        if not t:
+            out_lines.append(line)
+            continue
+        if t.startswith("#"):
+            if "URI=" in t:
+                line = re.sub(
+                    r'URI="([^"]+)"',
+                    lambda m: f'URI="{tok(m.group(1))}"',
+                    line,
+                    flags=re.IGNORECASE,
+                )
+            out_lines.append(line)
+            continue
+        out_lines.append(tok(t))
+    return "\n".join(out_lines) + "\n"
+
+
+def _rewrite_for_player(body: str, playlist_url: str) -> str:
+    """PLAYER mode — every URL becomes a same-origin proxy token
+    (/api/pwlive/seg?u=...). Real CDN URL never reaches the browser."""
+    base = request.host_url.rstrip("/")
+
+    def tok(raw: str) -> str:
+        absolute = urljoin(playlist_url, raw.strip())
+        absolute = _inherit_auth_params(absolute, playlist_url)
+        return f"{base}/api/pwlive/seg?u={_b64e(absolute)}"
+
+    return _rewrite_lines(body, playlist_url, tok)
+
+
+def _rewrite_for_download(body: str, playlist_url: str) -> str:
+    """DOWNLOAD mode — every URL becomes the real, absolute CDN URL (with
+    the playlist's signed auth params inherited onto segments that need
+    them) — NOT proxied through this domain. This is what lets a download
+    manager (1DM etc.) pull every segment directly from the CDN in
+    parallel, and lets the full playlist just play start-to-end in a
+    browser too."""
+
+    def tok(raw: str) -> str:
+        absolute = urljoin(playlist_url, raw.strip())
+        return _inherit_auth_params(absolute, playlist_url)
+
+    return _rewrite_lines(body, playlist_url, tok)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  Routes
+# ═══════════════════════════════════════════════════════════════════════════
+
+ROUTES = {
+    "player": "/api/pwlive/player?url=<m3u8-url> — proxied playlist for the web player (same-origin, CORS-safe)",
+    "download": "/api/pwlive/download?url=<m3u8-url> — full playlist, real CDN URLs, all segments in parallel (play or hand to a download manager)",
+    "seg": "/api/pwlive/seg?u=<token> — internal, used by the player route's rewritten playlist",
+    "watch": "/player?url=<m3u8-url> — the actual watchable page",
+}
+
+
+@flask_app.route("/")
+def index():
+    return jsonify({"status": "ok", "routes": ROUTES})
+
+
+@flask_app.route("/health")
+def health():
+    return jsonify({"status": "ok"})
+
+
+@flask_app.route("/api/pwlive/player")
+def api_pwlive_player():
+    url = (request.args.get("url") or "").strip()
+    if not url:
+        return jsonify({"error": "URL missing"}), 400
+
     try:
-        r = _fetch_upstream(doc["original_url"])
+        r = _fetch_upstream(url)
     except requests.RequestException as e:
         return jsonify({"error": f"Upstream error: {e}"}), 502
     if not r.ok:
         return jsonify({"error": f"Upstream failed: {r.status_code}"}), r.status_code
 
-    body = _rewrite_m3u8(r.text, doc["original_url"], name)
+    body = _rewrite_for_player(r.text, url)
     return Response(
         body,
         200,
@@ -198,9 +197,33 @@ def live_playlist(name):
     )
 
 
-@flask_app.route("/api/live/<name>/seg")
-def live_segment(name):
-    """Binary segments / nested playlists — opaque base64 token se fetch."""
+@flask_app.route("/api/pwlive/download")
+def api_pwlive_download():
+    url = (request.args.get("url") or "").strip()
+    if not url:
+        return jsonify({"error": "URL missing"}), 400
+
+    try:
+        r = _fetch_upstream(url)
+    except requests.RequestException as e:
+        return jsonify({"error": f"Upstream error: {e}"}), 502
+    if not r.ok:
+        return jsonify({"error": f"Upstream failed: {r.status_code}"}), r.status_code
+
+    body = _rewrite_for_download(r.text, url)
+    return Response(
+        body,
+        200,
+        content_type="application/vnd.apple.mpegurl",
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+    )
+
+
+@flask_app.route("/api/pwlive/seg")
+def api_pwlive_seg():
+    """Internal helper — fetches whatever the opaque token points to. Used
+    only by playlists that /api/pwlive/player hands out. Binary segments
+    pass straight through; nested playlists get rewritten again."""
     token = request.args.get("u")
     if not token:
         return jsonify({"error": "Missing segment token"}), 400
@@ -221,10 +244,8 @@ def live_segment(name):
 
     ctype = (r.headers.get("Content-Type") or "").lower()
     if "mpegurl" in ctype or "m3u8" in ctype or parsed.path.lower().endswith(".m3u8"):
-        # nested playlist — usko bhi rewrite karo
-        doc = lectures_col.find_one({"_id": name}, {"original_url": 1})
-        playlist_base = doc["original_url"] if doc else url
-        body = _rewrite_m3u8(r.text, url, name)
+        # nested playlist — usko bhi player-mode me rewrite karo
+        body = _rewrite_for_player(r.text, url)
         return Response(body, 200, content_type="application/vnd.apple.mpegurl")
 
     headers = {
@@ -241,241 +262,11 @@ def live_segment(name):
     )
 
 
-# ═══════════════════════════════════════════════════════════════════════════
-#  AUTH + ADMIN (Luctyebro jaisa strict login portal — as it is)
-# ═══════════════════════════════════════════════════════════════════════════
-
-def admin_required(view):
-    @functools.wraps(view)
-    def wrapped(*args, **kwargs):
-        if not session.get("is_admin"):
-            if request.path.startswith("/api/"):
-                return jsonify({"ok": False, "error": "Login required"}), 401
-            return redirect(url_for("index"))
-        return view(*args, **kwargs)
-    return wrapped
-
-
-def _sanitize_name(name: str) -> str:
-    """Spaces → hyphens; sirf letters (Hindi/English), numbers, hyphen."""
-    name = (name or "").strip()
-    name = re.sub(r"\s+", "-", name)
-    kept = []
-    for ch in name:
-        if ch == "-":
-            kept.append(ch)
-            continue
-        if unicodedata.category(ch)[0] in ("L", "N"):
-            kept.append(ch)
-    slug = "".join(kept)
-    slug = re.sub(r"-{2,}", "-", slug).strip("-")
-    return slug[:100]
-
-
-@flask_app.route("/login", methods=["POST"])
-def login():
-    data = request.get_json(silent=True) or {}
-    if (
-        data.get("owner_name") == OWNER_NAME
-        and data.get("admin_key") in ADMIN_KEYS
-        and data.get("vip_key") in VIP_KEYS
-    ):
-        session.permanent = True
-        session["is_admin"] = True
-        return jsonify({"ok": True})
-    return jsonify({"ok": False, "error": "Invalid Name / Admin Key / VIP Key."}), 401
-
-
-@flask_app.route("/logout", methods=["POST"])
-def logout():
-    session.clear()
-    return jsonify({"ok": True})
-
-
-@flask_app.route("/")
-def index():
-    return render_template("admin.html")
-
-
-@flask_app.route("/api/generate", methods=["POST"])
-@admin_required
-def api_generate():
-    data = request.get_json(silent=True) or {}
-    original_url = (data.get("original_url") or "").strip()
-    desired_name = (data.get("name") or "").strip()
-
-    if not original_url:
-        return jsonify({"ok": False, "error": "Original m3u8 link required"}), 400
-    if not original_url.startswith(("http://", "https://")):
-        return jsonify({"ok": False, "error": "Invalid link — valid http(s) URL do"}), 400
-
-    name = _sanitize_name(desired_name)
-    if not name:
-        return jsonify({
-            "ok": False,
-            "error": "Invalid class name — sirf letters, numbers aur hyphen(-) allowed hai.",
-        }), 400
-
-    now = datetime.utcnow()
-    token = base64.urlsafe_b64encode(os.urandom(12)).decode().rstrip("=")
-    lectures_col.update_one(
-        {"_id": name},
-        {
-            "$set": {
-                "original_url": original_url,
-                "status": "LIVE",
-                "title": display_title(name),
-                "updated_at": now,
-            },
-            "$setOnInsert": {
-                "created_at": now,
-                "token": token,
-                "duration": None,
-                "file_size": None,
-                "video_filename": None,
-            },
-            # Har naye/re-generate hone par watch_gen bump (field na ho to
-            # $inc khud 0 se shuru karke 1 kar deta hai) — agar is naam ka
-            # koi purana background watcher chal raha ho (purani link ke
-            # liye) to wo khud-ba-khud supersede/stop ho jaayega, aur ek
-            # naya watcher naye original_url ke liye start hoga neeche.
-            "$inc": {"watch_gen": 1},
-        },
-        upsert=True,
-    )
-    doc = lectures_col.find_one({"_id": name})
-
-    # Live end hote hi automatic download + local-storage processing ke
-    # liye background watcher — koi manual "Start Recording" click zaroori
-    # nahi, generate hote hi khud shuru ho jaata hai.
-    start_recording(name, original_url, lectures_col)
-
-    public_link = f"{PUBLIC_BASE_URL}/{name}"
-    return jsonify({
-        "ok": True,
-        "name": name,
-        "public_link": public_link,
-        "status": doc.get("status", "LIVE"),
-    })
-
-
-@flask_app.route("/api/record/<name>", methods=["POST"])
-@admin_required
-def api_record(name):
-    """Manual override/kick — agar kisi wajah se background watcher active
-    nahi hai (e.g. race condition) to ise idempotently (re)start karo.
-    Normal flow mein iski zaroorat nahi padti — generate hote hi automatic
-    watcher already chal raha hota hai."""
-    doc = lectures_col.find_one({"_id": name})
-    if not doc:
-        return jsonify({"ok": False, "error": "Stream not found"}), 404
-    status = doc.get("status")
-    if status == "READY":
-        return jsonify({"ok": False, "error": "Already READY"}), 409
-    started = start_recording(name, doc["original_url"], lectures_col)
-    if not started:
-        return jsonify({"ok": True, "status": status, "note": "Watcher already running"})
-    return jsonify({"ok": True, "status": doc.get("status", "LIVE")})
-
-
-@flask_app.route("/api/status/<name>")
-def api_status(name):
-    """Student page isko poll karta hai — LIVE / PROCESSING / READY."""
-    doc = lectures_col.find_one({"_id": name})
-    if not doc:
-        return jsonify({"ok": False, "error": "Not found"}), 404
-
-    status = doc.get("status", "LIVE")
-    resp = {"ok": True, "status": status, "title": display_title(name)}
-
-    if status == "READY":
-        resp["watch_url"] = f"{PUBLIC_BASE_URL}/recordings/{name}-480p.mp4"
-        resp["download_url"] = f"{PUBLIC_BASE_URL}/api/videos/{quote(name)}/download"
-        resp["duration"] = doc.get("duration")
-        resp["file_size"] = doc.get("file_size")
-    elif status == "ERROR":
-        resp["error"] = doc.get("error", "Processing failed")
-    return jsonify(resp)
-
-
-@flask_app.route("/recordings/<path:filename>")
-def recordings(filename):
-    # conditional=True → Range support (Watch Online seek ke liye)
-    return send_from_directory(
-        RECORDINGS_DIR, filename, conditional=True, mimetype="video/mp4"
-    )
-
-
-@flask_app.route("/api/videos/<name>/download")
-def api_download(name):
-    """
-    Direct browser/device download — Telegram ki koi zaroorat nahi.
-    - send_from_directory (Werkzeug send_file) file ko chunks mein
-      stream karta hai, poora file kabhi bhi server RAM mein load nahi
-      hota — 200-900MB files ke liye bhi safe hai.
-    - conditional=True → HTTP Range support (browsers isse resume-able
-      / paused-resumed downloads karte hain).
-    - as_attachment + download_name → proper
-      "Content-Disposition: attachment; filename=..." header, taaki
-      click karte hi seedha device storage mein save ho, naye tab mein
-      khule nahi.
-    """
-    doc = lectures_col.find_one({"_id": name}, {"status": 1, "video_filename": 1})
-    if not doc:
-        return jsonify({"error": "Stream not found"}), 404
-    if doc.get("status") != "READY":
-        return jsonify({"error": "Video abhi ready nahi hai"}), 409
-
-    filename = doc.get("video_filename") or f"{name}-480p.mp4"
-    file_path = os.path.join(RECORDINGS_DIR, filename)
-    if not os.path.exists(file_path):
-        return jsonify({"error": "File missing on server"}), 404
-
-    download_name = f"{display_title(name)}.mp4"
-    return send_from_directory(
-        RECORDINGS_DIR,
-        filename,
-        as_attachment=True,
-        download_name=download_name,
-        mimetype="video/mp4",
-        conditional=True,
-    )
-
-
-@flask_app.route("/generated/<name>")
-def generated(name):
-    doc = lectures_col.find_one({"_id": name}, {"_id": 1, "status": 1})
-    if not doc:
-        return redirect(url_for("index"))
-    public_link = f"{PUBLIC_BASE_URL}/{name}"
-    return render_template(
-        "generated.html", name=name, public_link=public_link, status=doc.get("status")
-    )
-
-
-@flask_app.route("/health")
-def health():
-    return jsonify({"status": "ok"})
-
-
-@flask_app.route("/<name>")
-def play(name):
-    doc = lectures_col.find_one({"_id": name})
-    if not doc:
-        return "Link galat hai ya Class expire ho gayi. 😔", 404
-    return render_template(
-        "player.html",
-        name=name,
-        title=display_title(name),
-        status=doc.get("status", "LIVE"),
-    )
-
-
-# ── Startup recovery ─────────────────────────────────────────────────────
-# App start/redeploy hote hi jo lectures LIVE/RECORDING/PROCESSING atki hui
-# thi unke background watchers dobara chalu karo, taaki koi bhi live class
-# jiska recording pending tha wo aage bhi khud-ba-khud process ho jaaye.
-threading.Thread(target=resume_pending, args=(lectures_col,), daemon=True).start()
+@flask_app.route("/player")
+def player_page():
+    """The watch page — reads ?url= client-side and plays it via
+    /api/pwlive/player. Missing url shows an inline error, same as the API."""
+    return render_template("player.html")
 
 
 def run_flask():
