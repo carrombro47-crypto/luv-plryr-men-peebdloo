@@ -4,10 +4,11 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
 <title>Live Player</title>
-<!-- "@latest" ek din bina warning ke breaking major version khinch sakta hai
-     aur pure script ko silently crash kar sakta hai (isliye design/live-badge/
-     go-live kuchh bhi nahi dikhta tha — poora IIFE Hls.isSupported() pe hi
-     ReferenceError khaake ruk jaata tha). Ek tested, stable version pin kiya. -->
+<!-- "@latest" ek din bina warning ke breaking major version khinch sakta
+     hai aur pura script silently crash kar sakta hai (isse pehle exactly
+     yehi hua tha — design/live-badge/go-live kuchh bhi nahi dikhta tha,
+     kyunki poora IIFE Hls.isSupported() pe hi ReferenceError khaake ruk
+     jaata tha). Ek tested, stable version yahan pin ki gayi hai. -->
 <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.15/dist/hls.min.js"
         onerror="window.__hlsLoadFailed = true;"></script>
 <style>
@@ -17,15 +18,27 @@
     box-sizing: border-box;
 }
 
+:root {
+    /* Ek jagah se poore player ka theme control hota hai — Live Player,
+       Download Player, aur watch page teeno isi ek variable set ko use
+       karte hain, isliye background hamesha consistent rehta hai. */
+    --bg: #e7e7ea;          /* light grey — jaisa maanga gaya */
+    --bg-video: #d9d9dd;    /* thoda darker light-grey letterbox bg */
+    --text-dim: rgba(20, 20, 22, 0.45);
+    --text-dim-strong: rgba(20, 20, 22, 0.65);
+    --spinner-track: rgba(20, 20, 22, 0.10);
+    --spinner-head: rgba(20, 20, 22, 0.35);
+}
+
 html, body {
     width: 100%;
-    height: 100%;
-    background: #2c2c2e;
+    background: var(--bg);
     overflow: hidden;
     /* Mobile browsers (Chrome/Safari) ka address-bar show/hide hone se
-       "100%"/"100vh" viewport se bada ho jaata hai, isliye video pura fit
-       nahi hota tha portrait me. --vh JS se real visible height set karta
-       hai; dvh un browsers ke liye jo already isko samajhte hain. */
+       plain "100%"/"100vh" viewport se bada calculate ho jaata hai, isliye
+       video/live-badge/go-live-button pura fit nahi hote the portrait me.
+       --vh JS se real visible height set karta hai (neeche script me);
+       100dvh un browsers ke liye jo pehle se hi ise samajhte hain. */
     height: calc(var(--vh, 1vh) * 100);
     height: 100dvh;
 }
@@ -37,17 +50,17 @@ html, body {
     display: flex;
     align-items: center;
     justify-content: center;
-    background: #2c2c2e;
+    background: var(--bg);
 }
 
 #video {
     width: 100%;
     height: 100%;
-    object-fit: contain;
-    background: #2c2c2e;
+    object-fit: contain; /* fit-to-screen — poora video letterbox ke saath dikhta hai, crop nahi hota */
+    background: var(--bg-video);
 }
 
-/* Simple Live Badge */
+/* Simple Live Badge — top-left */
 .live-badge {
     position: absolute;
     top: 16px;
@@ -55,7 +68,7 @@ html, body {
     display: none;
     align-items: center;
     gap: 8px;
-    background: rgba(0, 0, 0, 0.7);
+    background: rgba(20, 20, 22, 0.78);
     padding: 5px 12px 5px 10px;
     border-radius: 4px;
     z-index: 10;
@@ -86,7 +99,7 @@ html, body {
     50% { opacity: 0.2; }
 }
 
-/* Go Live — right side, always visible while the stream is live.
+/* Go Live — top-right, always visible while the stream is live.
    Red = you're behind the live edge, tap to jump to live.
    Grey = you're already watching live. */
 .go-live-btn {
@@ -112,17 +125,17 @@ html, body {
 }
 .go-live-btn.show { display: flex; }
 .go-live-btn.at-live {
-    background: rgba(255, 255, 255, 0.18);
-    color: rgba(255, 255, 255, 0.7);
+    background: rgba(20, 20, 22, 0.18);
+    color: rgba(20, 20, 22, 0.6);
 }
 
-/* Loading */
+/* Loading — dark-on-light now (background light grey hai) */
 .loading {
     position: absolute;
     top: 50%;
     left: 50%;
     transform: translate(-50%, -50%);
-    color: rgba(255, 255, 255, 0.3);
+    color: var(--text-dim);
     font-size: 13px;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
     z-index: 1;
@@ -133,8 +146,8 @@ html, body {
     width: 32px;
     height: 32px;
     margin: 0 auto 12px;
-    border: 2px solid rgba(255, 255, 255, 0.06);
-    border-top: 2px solid rgba(255, 255, 255, 0.25);
+    border: 2px solid var(--spinner-track);
+    border-top: 2px solid var(--spinner-head);
     border-radius: 50%;
     animation: spin 0.7s linear infinite;
 }
@@ -142,6 +155,26 @@ html, body {
 @keyframes spin {
     0% { transform: rotate(0deg); }
     100% { transform: rotate(360deg); }
+}
+
+/* Small mode chip — sirf debug/clarity ke liye, batata hai kaunsa source
+   use ho raha hai (Live Player = proxied, Download Player = direct CDN).
+   Bottom-left, subtle, kabhi bhi playback ke beech me nahi aata. */
+.mode-chip {
+    position: absolute;
+    bottom: 12px;
+    left: 12px;
+    z-index: 10;
+    color: var(--text-dim-strong);
+    background: rgba(255, 255, 255, 0.55);
+    padding: 3px 9px;
+    border-radius: 4px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.4px;
+    text-transform: uppercase;
+    pointer-events: none;
 }
 </style>
 </head>
@@ -160,6 +193,8 @@ html, body {
 
     <button class="go-live-btn" id="goLiveBtn">⏵ Go Live</button>
 
+    <span class="mode-chip" id="modeChip"></span>
+
     <video id="video" controls autoplay playsinline></video>
 </div>
 
@@ -169,10 +204,11 @@ html, body {
     const loading = document.getElementById('loading');
     const liveBadge = document.getElementById('liveBadge');
     const goLiveBtn = document.getElementById('goLiveBtn');
+    const modeChip = document.getElementById('modeChip');
 
-    // ── Real viewport height (mobile address-bar fix) ────────────────────
-    // html/body ka CSS "100dvh" fallback bhi rakhta hai, lekin purane
-    // Chrome/WebView jo dvh nahi samajhte unke liye yahi asli fix hai.
+    // ── Real viewport height (mobile address-bar fit-to-screen fix) ──────
+    // CSS ka "100dvh" fallback bhi rakha hai, lekin purane Chrome/WebView
+    // jo dvh nahi samajhte unke liye yehi asli fix hai.
     function setRealVh() {
         document.documentElement.style.setProperty('--vh', (window.innerHeight * 0.01) + 'px');
     }
@@ -180,11 +216,18 @@ html, body {
     window.addEventListener('resize', setRealVh);
     window.addEventListener('orientationchange', setRealVh);
 
-    const rawUrl = new URLSearchParams(window.location.search).get('url');
+    const params = new URLSearchParams(window.location.search);
+    const rawUrl = params.get('url');
+    // ?mode=download → direct-CDN "Download Player" (uses /api/pwlive/download).
+    // Default (koi mode nahi, ya kuchh aur) → proxied "Live / Watch Player"
+    // (uses /api/pwlive/player). Dono EXACT same design/background share
+    // karte hain — sirf backend source alag hota hai.
+    const mode = (params.get('mode') || '').toLowerCase() === 'download' ? 'download' : 'player';
+    modeChip.textContent = mode === 'download' ? 'Download Player' : 'Live Player';
 
     function showError(msg) {
         loading.innerHTML = '✕ ' + msg;
-        loading.style.color = 'rgba(255, 45, 45, 0.6)';
+        loading.style.color = 'rgba(200, 40, 40, 0.8)';
         const spinner = document.querySelector('.spinner');
         if (spinner) spinner.style.display = 'none';
     }
@@ -194,8 +237,11 @@ html, body {
         return;
     }
 
-    // Same-origin proxy — real CDN URL never reaches the browser.
-    const url = '/api/pwlive/player?url=' + encodeURIComponent(rawUrl);
+    // Same-origin proxy — chahe "player" mode ho ya "download" mode, yeh
+    // request hamesha isi domain pe jaati hai (relative URL), isliye CORS
+    // yahan kabhi issue nahi hota — sirf ek same-origin fetch hai.
+    const apiPath = mode === 'download' ? '/api/pwlive/download' : '/api/pwlive/player';
+    const url = apiPath + '?url=' + encodeURIComponent(rawUrl);
 
     let hls = null;
     let isLive = false;
@@ -251,14 +297,14 @@ html, body {
     video.addEventListener('timeupdate', checkLiveEdge);
     video.addEventListener('seeked', checkLiveEdge);
 
-    // window.__hlsLoadFailed is set by the <script onerror> above if the
-    // jsdelivr CDN request itself failed (network block etc). Checking
-    // `typeof Hls === 'undefined'` too covers any other silent load
-    // failure. Earlier this whole block wasn't guarded, so ANY failure
-    // here (Hls missing, a bad config option, etc.) threw uncaught and
-    // killed the rest of the script — that's exactly why the live badge,
-    // go-live button, and our loading/error UI never showed up: only the
-    // bare native <video controls> element was left on screen.
+    // window.__hlsLoadFailed set hota hai <script onerror> se agar jsdelivr
+    // CDN request hi fail ho gayi (network block waghera). typeof Hls ===
+    // 'undefined' check koi bhi doosri silent load-failure cover karta hai.
+    // Pehle yeh poora block unguarded tha, isliye YAHAN koi bhi failure
+    // (Hls missing, bad config option) uncaught throw karke pure script ko
+    // maar deti thi — isi wajah se live badge, go-live button, aur hamara
+    // apna loading/error UI kabhi dikhta hi nahi tha: sirf bare native
+    // <video controls> element reh jaata tha.
     try {
         if (window.__hlsLoadFailed || typeof Hls === 'undefined') {
             throw new Error('hls-lib-unavailable');
