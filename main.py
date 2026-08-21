@@ -91,10 +91,46 @@ def add_cors_headers(resp):
     """CORS on every response — success ho ya error."""
     resp.headers["Access-Control-Allow-Origin"] = "*"
     resp.headers["Access-Control-Allow-Methods"] = "GET, HEAD, OPTIONS"
-    resp.headers["Access-Control-Allow-Headers"] = "*"
+    # Wildcard "*" ke saath explicit "Range" bhi — kuch purane/strict HTTP
+    # clients wildcard ko preflight me Range jaise non-safelisted header ke
+    # liye poora honor nahi karte, explicit listing safe rehti hai.
+    resp.headers["Access-Control-Allow-Headers"] = "*, Range"
     resp.headers["Access-Control-Expose-Headers"] = "*"
     resp.headers["Access-Control-Max-Age"] = "86400"
+    # Cloudflare (ya koi bhi CDN) is response ko cache na kare aur baad me
+    # kisi doosre Origin ki request pe wahi cached CORS headers serve na
+    # kar de — Origin ke hisaab se response alag ho sakta hai, batate hain.
+    resp.headers["Vary"] = ", ".join(
+        filter(None, [resp.headers.get("Vary"), "Origin"])
+    )
     return resp
+
+
+@flask_app.before_request
+def handle_preflight():
+    """Explicit, fast OPTIONS preflight — turant CORS headers ke saath 204
+    return karo, kisi bhi route logic (upstream fetch, token decode, etc.)
+    ko chhue bina. Flask khud OPTIONS ko auto-handle karta hai, lekin agar
+    kabhi automatic_options disable ho ya koi aur middleware beech me aa
+    jaye, yeh explicit fast-path preflight ko kabhi bhi confuse/delay nahi
+    hone deta — video-loading me har extra round-trip/uncertainty seedha
+    "video load nahi ho raha" bankar dikhta hai."""
+    if request.method == "OPTIONS":
+        return Response(status=204)
+
+
+@flask_app.errorhandler(Exception)
+def handle_any_error(e):
+    """Koi bhi uncaught exception (ya werkzeug ka apna HTTPException) bhi
+    CORS headers ke bina browser tak na pahunche — warna browser console
+    me generic "CORS error" dikhta hai jabki asli wajah kuchh aur hoti hai,
+    aur debug karna mushkil ho jaata hai. `after_request` waise bhi error
+    responses pe chalta hai, lekin yeh ek explicit safety net hai."""
+    from werkzeug.exceptions import HTTPException
+
+    if isinstance(e, HTTPException):
+        return jsonify({"error": e.description}), e.code
+    return jsonify({"error": f"Internal error: {e}"}), 500
 
 
 def _raw_query_param(name: str):
