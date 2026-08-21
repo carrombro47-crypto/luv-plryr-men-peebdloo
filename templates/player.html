@@ -4,7 +4,12 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
 <title>Live Player</title>
-<script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+<!-- "@latest" ek din bina warning ke breaking major version khinch sakta hai
+     aur pure script ko silently crash kar sakta hai (isliye design/live-badge/
+     go-live kuchh bhi nahi dikhta tha — poora IIFE Hls.isSupported() pe hi
+     ReferenceError khaake ruk jaata tha). Ek tested, stable version pin kiya. -->
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.15/dist/hls.min.js"
+        onerror="window.__hlsLoadFailed = true;"></script>
 <style>
 * {
     margin: 0;
@@ -17,6 +22,12 @@ html, body {
     height: 100%;
     background: #2c2c2e;
     overflow: hidden;
+    /* Mobile browsers (Chrome/Safari) ka address-bar show/hide hone se
+       "100%"/"100vh" viewport se bada ho jaata hai, isliye video pura fit
+       nahi hota tha portrait me. --vh JS se real visible height set karta
+       hai; dvh un browsers ke liye jo already isko samajhte hain. */
+    height: calc(var(--vh, 1vh) * 100);
+    height: 100dvh;
 }
 
 .player-wrapper {
@@ -159,6 +170,16 @@ html, body {
     const liveBadge = document.getElementById('liveBadge');
     const goLiveBtn = document.getElementById('goLiveBtn');
 
+    // ── Real viewport height (mobile address-bar fix) ────────────────────
+    // html/body ka CSS "100dvh" fallback bhi rakhta hai, lekin purane
+    // Chrome/WebView jo dvh nahi samajhte unke liye yahi asli fix hai.
+    function setRealVh() {
+        document.documentElement.style.setProperty('--vh', (window.innerHeight * 0.01) + 'px');
+    }
+    setRealVh();
+    window.addEventListener('resize', setRealVh);
+    window.addEventListener('orientationchange', setRealVh);
+
     const rawUrl = new URLSearchParams(window.location.search).get('url');
 
     function showError(msg) {
@@ -230,48 +251,76 @@ html, body {
     video.addEventListener('timeupdate', checkLiveEdge);
     video.addEventListener('seeked', checkLiveEdge);
 
-    if (Hls.isSupported()) {
-        hls = new Hls({
-            liveDurationInfinity: true,
-            enableWorker: true
-        });
+    // window.__hlsLoadFailed is set by the <script onerror> above if the
+    // jsdelivr CDN request itself failed (network block etc). Checking
+    // `typeof Hls === 'undefined'` too covers any other silent load
+    // failure. Earlier this whole block wasn't guarded, so ANY failure
+    // here (Hls missing, a bad config option, etc.) threw uncaught and
+    // killed the rest of the script — that's exactly why the live badge,
+    // go-live button, and our loading/error UI never showed up: only the
+    // bare native <video controls> element was left on screen.
+    try {
+        if (window.__hlsLoadFailed || typeof Hls === 'undefined') {
+            throw new Error('hls-lib-unavailable');
+        }
 
-        hls.loadSource(url);
-        hls.attachMedia(video);
+        if (Hls.isSupported()) {
+            hls = new Hls({
+                liveDurationInfinity: true,
+                enableWorker: true
+            });
 
-        hls.on(Hls.Events.MANIFEST_PARSED, function() {
-            video.play().catch(function() {});
-        });
+            hls.loadSource(url);
+            hls.attachMedia(video);
 
-        hls.on(Hls.Events.LEVEL_LOADED, function(_evt, data) {
-            isLive = !!(data && data.details && data.details.live);
-            liveBadge.classList.toggle('show', isLive);
-            goLiveBtn.classList.toggle('show', isLive);
-            checkLiveEdge();
-        });
+            hls.on(Hls.Events.MANIFEST_PARSED, function() {
+                video.play().catch(function() {});
+            });
 
-        hls.on(Hls.Events.ERROR, function(_, data) {
-            if (data.fatal) {
-                if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
-                    hls.startLoad();
-                } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
-                    hls.recoverMediaError();
-                } else {
-                    showError('Stream error — refresh the page.');
+            hls.on(Hls.Events.LEVEL_LOADED, function(_evt, data) {
+                isLive = !!(data && data.details && data.details.live);
+                liveBadge.classList.toggle('show', isLive);
+                goLiveBtn.classList.toggle('show', isLive);
+                checkLiveEdge();
+            });
+
+            hls.on(Hls.Events.ERROR, function(_, data) {
+                if (data.fatal) {
+                    if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+                        hls.startLoad();
+                    } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+                        hls.recoverMediaError();
+                    } else {
+                        showError('Stream error — refresh the page.');
+                    }
                 }
-            }
-        });
+            });
 
-    } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-        video.src = url;
-        isLive = true; // Safari native HLS doesn't expose this easily; assume live.
-        liveBadge.classList.add('show');
-        goLiveBtn.classList.add('show');
-        video.addEventListener('loadedmetadata', function() {
-            video.play().catch(function() {});
-        });
-    } else {
-        showError('HLS not supported');
+        } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+            video.src = url;
+            isLive = true; // Safari native HLS doesn't expose this easily; assume live.
+            liveBadge.classList.add('show');
+            goLiveBtn.classList.add('show');
+            video.addEventListener('loadedmetadata', function() {
+                video.play().catch(function() {});
+            });
+        } else {
+            showError('HLS not supported');
+        }
+    } catch (e) {
+        if (video.canPlayType('application/vnd.apple.mpegurl')) {
+            // hls.js load failed but native HLS is available (Safari) —
+            // fall back instead of leaving the player fully broken.
+            video.src = url;
+            isLive = true;
+            liveBadge.classList.add('show');
+            goLiveBtn.classList.add('show');
+            video.addEventListener('loadedmetadata', function() {
+                video.play().catch(function() {});
+            });
+        } else {
+            showError('Player library failed to load — check connection & refresh.');
+        }
     }
 })();
 </script>
