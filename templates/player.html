@@ -2,246 +2,207 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
-<title>Live Player</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PW LIVE PLAYER</title>
 <!-- "@latest" ek din bina warning ke breaking major version khinch sakta
-     hai aur pura script silently crash kar sakta hai (isse pehle exactly
-     yehi hua tha — design/live-badge/go-live kuchh bhi nahi dikhta tha,
-     kyunki poora IIFE Hls.isSupported() pe hi ReferenceError khaake ruk
-     jaata tha). Ek tested, stable version yahan pin ki gayi hai. -->
+     hai — ek tested, stable version yahan pin ki gayi hai. -->
 <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.15/dist/hls.min.js"
         onerror="window.__hlsLoadFailed = true;"></script>
 <style>
-* {
-    margin: 0;
-    padding: 0;
-    box-sizing: border-box;
-}
-
 :root {
-    /* Ek jagah se poore player ka theme control hota hai — Live Player,
-       Download Player, aur watch page teeno isi ek variable set ko use
-       karte hain, isliye background hamesha consistent rehta hai. */
-    --bg: #dceaf7;          /* light blue */
-    --bg-video: #c9def2;    /* thoda darker light-blue letterbox bg */
-    --text-dim: rgba(15, 30, 50, 0.45);
-    --text-dim-strong: rgba(15, 30, 50, 0.65);
-    --spinner-track: rgba(15, 30, 50, 0.10);
-    --spinner-head: rgba(15, 30, 50, 0.35);
+    --bg:#0b0f1a; --card:rgba(255,255,255,.05); --border:rgba(255,255,255,.1);
+    --accent:#6c5ce7; --accent2:#00d2ff; --text:#e5e7eb; --muted:#9ca3af;
+    --danger:#ff5470; --ok:#2dd4a7;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body {
+    font-family:"Segoe UI",-apple-system,BlinkMacSystemFont,Roboto,Arial,sans-serif;
+    background:radial-gradient(900px 500px at 20% -10%, rgba(108,92,231,.22), transparent 60%),
+               radial-gradient(800px 400px at 110% 0%, rgba(0,210,255,.13), transparent 60%),
+               var(--bg);
+    color:var(--text); min-height:100vh;
+    display:flex; flex-direction:column;
 }
 
-html, body {
-    width: 100%;
-    background: var(--bg);
-    overflow: hidden;
-    /* Mobile browsers (Chrome/Safari) ka address-bar show/hide hone se
-       plain "100%"/"100vh" viewport se bada calculate ho jaata hai, isliye
-       video/live-badge/go-live-button pura fit nahi hote the portrait me.
-       --vh JS se real visible height set karta hai (neeche script me);
-       100dvh un browsers ke liye jo pehle se hi ise samajhte hain. */
-    height: calc(var(--vh, 1vh) * 100);
-    height: 100dvh;
+/* ── Header ── */
+header {
+    padding:16px 24px; display:flex; align-items:center; justify-content:space-between;
+    border-bottom:1px solid var(--border);
+    background:rgba(11,15,26,.75); backdrop-filter:blur(12px);
+    position:sticky; top:0; z-index:50;
 }
+.brand { display:flex; align-items:center; gap:12px; }
+.logo {
+    width:36px; height:36px; border-radius:10px; flex-shrink:0;
+    background:linear-gradient(135deg, var(--accent), var(--accent2));
+    display:flex; align-items:center; justify-content:center; font-size:16px;
+    box-shadow:0 4px 16px rgba(108,92,231,.45);
+}
+.brand h1 { font-size:17px; font-weight:700; letter-spacing:.5px; }
+.brand small { display:block; font-size:11px; color:var(--muted); font-weight:400; }
 
-.player-wrapper {
-    position: relative;
-    width: 100%;
-    height: 100%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: var(--bg);
-}
+.live-badge { display:none; align-items:center; gap:7px; padding:5px 13px; border-radius:999px;
+    background:rgba(255,45,45,.12); border:1px solid rgba(255,45,45,.4); }
+.live-badge.show { display:flex; }
+.live-dot { width:8px; height:8px; background:#ff2d2d; border-radius:50%; animation:blink 1s infinite; box-shadow:0 0 8px #ff2d2d; }
+@keyframes blink { 50% { opacity:.25; } }
+.live-badge span { font-size:11px; font-weight:700; letter-spacing:1px; color:#ff5c5c; }
 
-#video {
-    width: 100%;
-    height: 100%;
-    object-fit: contain; /* fit-to-screen — poora video letterbox ke saath dikhta hai, crop nahi hota */
-    background: var(--bg-video);
-}
+/* ── Main ── */
+main { flex:1; display:flex; flex-direction:column; align-items:center; padding:22px 16px 40px; }
+.class-title { font-size:15px; color:var(--muted); margin-bottom:14px; text-align:center;
+    max-width:900px; word-break:break-word; }
 
-/* Simple Live Badge — top-left */
-.live-badge {
-    position: absolute;
-    top: 16px;
-    left: 16px;
-    display: none;
-    align-items: center;
-    gap: 8px;
-    background: rgba(20, 20, 22, 0.78);
-    padding: 5px 12px 5px 10px;
-    border-radius: 4px;
-    z-index: 10;
-    pointer-events: none;
-    border-left: 3px solid #ff2d2d;
+/* ── Player shell ── */
+.shell {
+    position:relative; width:100%; max-width:960px; aspect-ratio:16/9;
+    background:#000; border-radius:16px; overflow:hidden;
+    border:1px solid var(--border); box-shadow:0 20px 60px rgba(0,0,0,.5);
 }
-.live-badge.show { display: flex; }
+#video { width:100%; height:100%; object-fit:contain; background:#000; display:block; }
 
-.live-dot {
-    width: 8px;
-    height: 8px;
-    background: #ff2d2d;
-    border-radius: 50%;
-    animation: blink 1s ease-in-out infinite;
+/* ── Overlay (loading / ended / error) ── */
+.overlay {
+    position:absolute; inset:0; z-index:20; display:flex; flex-direction:column;
+    align-items:center; justify-content:center; gap:16px; text-align:center;
+    background:rgba(5,8,15,.85); padding:24px;
 }
+.overlay.hidden { display:none; }
+.spinner { width:44px; height:44px; border-radius:50%;
+    border:3px solid rgba(255,255,255,.1); border-top-color:var(--accent2);
+    animation:spin .8s linear infinite; }
+@keyframes spin { to { transform:rotate(360deg); } }
+.overlay .msg { font-size:14px; color:var(--muted); max-width:420px; }
+.overlay .msg.error { color:var(--danger); }
 
-.live-text {
-    color: #fff;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
-    font-size: 12px;
-    font-weight: 600;
-    letter-spacing: 0.5px;
-    text-transform: uppercase;
+.ended-title { font-size:22px; font-weight:700; }
+.ended-sub { font-size:13px; color:var(--muted); }
+.action-row { display:flex; gap:14px; flex-wrap:wrap; justify-content:center; margin-top:8px; }
+.big-btn {
+    display:inline-flex; align-items:center; gap:9px; padding:14px 28px;
+    border:none; border-radius:12px; font-size:15px; font-weight:700; cursor:pointer;
+    text-decoration:none; color:#fff; transition:transform .15s, box-shadow .2s;
 }
+.big-btn:active { transform:scale(.96); }
+.big-btn.watch { background:linear-gradient(135deg, var(--accent), #8e7bff); box-shadow:0 6px 22px rgba(108,92,231,.45); }
+.big-btn.download { background:linear-gradient(135deg, #0088cc, #00c2ff); box-shadow:0 6px 22px rgba(0,150,220,.45); }
 
-@keyframes blink {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.2; }
+/* ── Custom control bar ── */
+.controls {
+    position:absolute; left:0; right:0; bottom:0; z-index:15;
+    display:flex; flex-direction:column; gap:8px; padding:10px 14px;
+    background:linear-gradient(transparent, rgba(0,0,0,.75));
+    opacity:0; transition:opacity .25s;
 }
+.shell:hover .controls, .controls.force-show { opacity:1; }
+.controls-top { display:flex; justify-content:flex-end; }
+.controls-bottom { display:flex; align-items:center; gap:10px; }
+.cbtn {
+    background:rgba(255,255,255,.12); border:1px solid rgba(255,255,255,.2);
+    color:#fff; border-radius:8px; width:38px; height:38px; cursor:pointer;
+    display:flex; align-items:center; justify-content:center; font-size:15px;
+    flex-shrink:0; transition:background .2s;
+}
+.cbtn:hover { background:rgba(255,255,255,.25); }
+.progress-wrap { flex:1; height:5px; background:rgba(255,255,255,.18); border-radius:99px; cursor:pointer; position:relative; }
+.progress-bar { height:100%; background:linear-gradient(90deg, var(--accent), var(--accent2)); border-radius:99px; width:0%; }
+.time-label { font-size:11.5px; color:#d1d5db; min-width:70px; text-align:center; flex-shrink:0; }
+.go-live {
+    padding:0 14px; height:30px; border:none; border-radius:999px;
+    background:rgba(255,45,45,.92); color:#fff; font-size:11px; font-weight:700;
+    letter-spacing:1px; cursor:pointer; display:flex; align-items:center; gap:6px;
+    flex-shrink:0; transition:background .2s, box-shadow .2s;
+    box-shadow:0 4px 14px rgba(255,45,45,.4);
+}
+.go-live:hover { background:#ff2d2d; }
+.go-live.at-live { background:rgba(255,255,255,.16); box-shadow:none; }
+.go-live .gdot { width:7px; height:7px; border-radius:50%; background:#fff; animation:blink 1s infinite; }
+.go-live.at-live .gdot { animation:none; }
 
-/* Go Live — top-right, always visible while the stream is live.
-   Red = you're behind the live edge, tap to jump to live.
-   Grey = you're already watching live. */
-.go-live-btn {
-    position: absolute;
-    top: 16px;
-    right: 16px;
-    z-index: 10;
-    display: none;
-    align-items: center;
-    gap: 6px;
-    background: #ff2d2d;
-    color: #fff;
-    border: none;
-    padding: 7px 14px;
-    border-radius: 6px;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
-    font-size: 12px;
-    font-weight: 700;
-    letter-spacing: 0.3px;
-    text-transform: uppercase;
-    cursor: pointer;
-    transition: background 0.2s, color 0.2s;
-}
-.go-live-btn.show { display: flex; }
-.go-live-btn.at-live {
-    background: rgba(20, 20, 22, 0.18);
-    color: rgba(20, 20, 22, 0.6);
-}
+.live-elapsed { display:flex; align-items:center; gap:6px; }
+.live-elapsed .ldot { width:6px; height:6px; border-radius:50%; background:var(--accent2); flex-shrink:0; }
 
-/* Loading — dark-on-light now (background light grey hai) */
-.loading {
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    color: var(--text-dim);
-    font-size: 13px;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
-    z-index: 1;
-    text-align: center;
-}
-
-.spinner {
-    width: 32px;
-    height: 32px;
-    margin: 0 auto 12px;
-    border: 2px solid var(--spinner-track);
-    border-top: 2px solid var(--spinner-head);
-    border-radius: 50%;
-    animation: spin 0.7s linear infinite;
-}
-
-@keyframes spin {
-    0% { transform: rotate(0deg); }
-    100% { transform: rotate(360deg); }
-}
-
-/* Small mode chip — sirf debug/clarity ke liye, batata hai kaunsa source
-   use ho raha hai (Live Player = proxied, Download Player = direct CDN).
-   Bottom-left, subtle, kabhi bhi playback ke beech me nahi aata. */
-.mode-chip {
-    position: absolute;
-    bottom: 12px;
-    left: 12px;
-    z-index: 10;
-    color: var(--text-dim-strong);
-    background: rgba(255, 255, 255, 0.55);
-    padding: 3px 9px;
-    border-radius: 4px;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
-    font-size: 10px;
-    font-weight: 600;
-    letter-spacing: 0.4px;
-    text-transform: uppercase;
-    pointer-events: none;
-}
+footer { text-align:center; color:var(--muted); font-size:11.5px; padding:14px; }
 </style>
 </head>
 <body>
 
-<div class="player-wrapper">
-    <div class="loading" id="loading">
-        <div class="spinner"></div>
-        Loading...
+<header>
+    <div class="brand">
+        <div class="logo">▶</div>
+        <div>
+            <h1>PW LIVE PLAYER</h1>
+            <small>Premium Server</small>
+        </div>
     </div>
-
     <div class="live-badge" id="liveBadge">
-        <div class="live-dot"></div>
-        <span class="live-text">LIVE</span>
+        <div class="live-dot"></div><span>LIVE</span>
     </div>
+</header>
 
-    <button class="go-live-btn" id="goLiveBtn">⏵ Go Live</button>
+<main>
+    <div class="class-title" id="classTitle">Loading…</div>
 
-    <span class="mode-chip" id="modeChip"></span>
+    <div class="shell" id="shell">
+        <video id="video" playsinline></video>
 
-    <video id="video" controls autoplay playsinline></video>
-</div>
+        <!-- Custom controls -->
+        <div class="controls" id="controls">
+            <div class="controls-top">
+                <button class="go-live" id="btnGoLive"><span class="gdot"></span>Go Live</button>
+            </div>
+            <div class="controls-bottom">
+                <span class="time-label live-elapsed live-only" id="liveElapsedLabel"><span class="ldot"></span><span id="liveElapsedText">00:00</span></span>
+                <button class="cbtn vod-only" id="btnSkipBack" title="-10s" style="display:none;">⏪</button>
+                <div class="progress-wrap" id="progressWrap"><div class="progress-bar" id="progressBar"></div></div>
+                <button class="cbtn vod-only" id="btnSkipFwd" title="+10s" style="display:none;">⏩</button>
+                <span class="time-label vod-only" id="timeLabel" style="display:none;"></span>
+                <button class="cbtn vod-only" id="btnSpeed" title="Playback speed" style="display:none; width:auto; padding:0 10px;">1x</button>
+                <button class="cbtn" id="btnFullscreen" title="Fullscreen">⛶</button>
+            </div>
+        </div>
+
+        <!-- Overlay -->
+        <div class="overlay" id="overlay">
+            <div class="spinner" id="spinner"></div>
+            <div class="msg" id="overlayMsg">Loading Please Wait...</div>
+            <div id="endedBox" style="display:none; flex-direction:column; align-items:center; gap:10px;">
+                <div class="ended-title">📺 Class Ended</div>
+                <div class="ended-sub">The live stream has ended — you can now watch or download the recording.</div>
+                <div class="action-row">
+                    <button class="big-btn watch" id="btnWatch">▶ Watch Online</button>
+                    <a class="big-btn download" id="btnDownload" href="#" target="_blank" rel="noopener">⬇ Download Now</a>
+                </div>
+            </div>
+        </div>
+    </div>
+</main>
+
+<footer>Made With ❤️</footer>
 
 <script>
-(function() {
-    const video = document.getElementById('video');
-    const loading = document.getElementById('loading');
-    const liveBadge = document.getElementById('liveBadge');
-    const goLiveBtn = document.getElementById('goLiveBtn');
-    const modeChip = document.getElementById('modeChip');
+(function () {
+    "use strict";
 
-    // ── Real viewport height (mobile address-bar fit-to-screen fix) ──────
-    // CSS ka "100dvh" fallback bhi rakha hai, lekin purane Chrome/WebView
-    // jo dvh nahi samajhte unke liye yehi asli fix hai.
-    function setRealVh() {
-        document.documentElement.style.setProperty('--vh', (window.innerHeight * 0.01) + 'px');
-    }
-    setRealVh();
-    window.addEventListener('resize', setRealVh);
-    window.addEventListener('orientationchange', setRealVh);
-
-    // ── Robust raw query-string parsing (mirrors main.py's
-    // _raw_query_param) ─────────────────────────────────────────────────
+    // ── Robust raw query-string parsing ─────────────────────────────────
     // Our ?url=<m3u8> value is itself a full CDN URL with its OWN query
     // string (Signature/Key-Pair-Id/Policy/start — full of '&','=','~').
-    // The backend already handles this correctly via _raw_query_param,
-    // but this page was still using plain URLSearchParams() to read
-    // window.location.search — which silently truncates at the FIRST
-    // un-encoded '&' inside that nested URL. So pasting a raw (not
-    // encodeURIComponent()'d) CDN link straight into the address bar —
-    // e.g. /player?url=https://cdn/x.m3u8?Signature=A&Key-Pair-Id=B&Policy=C —
-    // lost everything after "Signature=A" (crucially Key-Pair-Id and
-    // Policy), and the CDN then rejected the now-incomplete signed
-    // request. THIS was the actual "live play nahi ho raha" bug — not
-    // CORS. Fix: read `url` from the RAW query string, taking everything
-    // from its marker to the end (exactly like the backend does), instead
-    // of letting URLSearchParams split on every '&' it finds.
+    // Plain URLSearchParams() truncates at the FIRST un-encoded '&' inside
+    // that nested URL — so a raw (not encodeURIComponent()'d) CDN link
+    // pasted straight into the address bar would silently lose
+    // Key-Pair-Id/Policy and the CDN would reject the request. Reading
+    // `url` from the RAW query string (marker → end of string) instead
+    // fixes that; this mirrors main.py's own _raw_query_param.
     //
     // Convention: if you also want ?mode=download, put it BEFORE url —
     // e.g. /player?mode=download&url=<m3u8> — because an unencoded `url`
     // value (correctly) claims everything after it to the end of the
     // string.
     function rawQueryParam(name) {
-        var qs = window.location.search.replace(/^\?/, '');
-        var marker = name + '=';
+        var qs = window.location.search.replace(/^\?/, "");
+        var marker = name + "=";
         var idx = qs.indexOf(marker);
-        while (idx !== -1 && idx !== 0 && qs[idx - 1] !== '&') {
+        while (idx !== -1 && idx !== 0 && qs[idx - 1] !== "&") {
             idx = qs.indexOf(marker, idx + 1);
         }
         if (idx === -1) return null;
@@ -253,158 +214,322 @@ html, body {
         }
     }
 
-    const modeMatch = window.location.search.match(/[?&]mode=([^&]*)/);
-    const mode = ((modeMatch ? decodeURIComponent(modeMatch[1]) : '').toLowerCase() === 'download')
-        ? 'download' : 'player';
-    modeChip.textContent = mode === 'download' ? 'Download Player' : 'Live Player';
+    var modeMatch = window.location.search.match(/[?&]mode=([^&]*)/);
+    var MODE = ((modeMatch ? decodeURIComponent(modeMatch[1]) : "").toLowerCase() === "download")
+        ? "download" : "player";
+    var RAW_URL = rawQueryParam("url");
 
-    const rawUrl = rawQueryParam('url');
+    var video = document.getElementById("video");
+    var shell = document.getElementById("shell");
+    var overlay = document.getElementById("overlay");
+    var overlayMsg = document.getElementById("overlayMsg");
+    var spinner = document.getElementById("spinner");
+    var endedBox = document.getElementById("endedBox");
+    var btnWatch = document.getElementById("btnWatch");
+    var btnDownload = document.getElementById("btnDownload");
+    var liveBadge = document.getElementById("liveBadge");
+    var classTitle = document.getElementById("classTitle");
+    var controls = document.getElementById("controls");
+    var btnFullscreen = document.getElementById("btnFullscreen");
+    var btnGoLive = document.getElementById("btnGoLive");
+    var btnSkipBack = document.getElementById("btnSkipBack");
+    var btnSkipFwd = document.getElementById("btnSkipFwd");
+    var btnSpeed = document.getElementById("btnSpeed");
+    var progressBar = document.getElementById("progressBar");
+    var progressWrap = document.getElementById("progressWrap");
+    var timeLabel = document.getElementById("timeLabel");
+    var liveElapsedLabel = document.getElementById("liveElapsedLabel");
+    var liveElapsedText = document.getElementById("liveElapsedText");
 
+    var hls = null;
+    var isLive = true;
+    var hasEnded = false;
+
+    classTitle.textContent = MODE === "download" ? "Download Player" : "Live Player";
+
+    var liveDurationBase = null;
+    var liveDurationBaseAt = 0;
+
+    var manifestEverLoaded = false;
+    var loadWatchdog = null;
+    var LOAD_WATCHDOG_MS = 20000;
+
+    function clearLoadWatchdog() {
+        if (loadWatchdog) { clearTimeout(loadWatchdog); loadWatchdog = null; }
+    }
+    function armLoadWatchdog() {
+        clearLoadWatchdog();
+        loadWatchdog = setTimeout(function () {
+            if (!manifestEverLoaded) {
+                showError("The stream won't start — the link has expired or the server is slow. Refresh after a while.");
+            }
+        }, LOAD_WATCHDOG_MS);
+    }
+
+    function showLoading(msg) {
+        overlay.classList.remove("hidden");
+        spinner.style.display = "block";
+        endedBox.style.display = "none";
+        overlayMsg.style.display = "block";
+        overlayMsg.textContent = msg;
+        overlayMsg.className = "msg";
+    }
     function showError(msg) {
-        loading.innerHTML = '✕ ' + msg;
-        loading.style.color = 'rgba(200, 40, 40, 0.8)';
-        const spinner = document.querySelector('.spinner');
-        if (spinner) spinner.style.display = 'none';
+        overlay.classList.remove("hidden");
+        spinner.style.display = "none";
+        endedBox.style.display = "none";
+        overlayMsg.style.display = "block";
+        overlayMsg.textContent = "✕ " + msg;
+        overlayMsg.className = "msg error";
+    }
+    function hideOverlay() { overlay.classList.add("hidden"); }
+
+    function attemptAutoplay() {
+        video.play().catch(function () {
+            video.muted = true;
+            video.play().catch(function () {});
+        });
     }
 
-    if (!rawUrl) {
-        showError('URL missing — ?url=&lt;index.m3u8&gt; lagakar aao.');
-        return;
+    // ─────────── Stream-ended handling ───────────
+    // Purane (MongoDB/recorder) system mein "ended" ka matlab tha: alag se
+    // MP4 convert + Telegram upload complete hone ka wait, isliye status
+    // ek /api/status/<name> API poll karta tha. Ab wo pura pipeline hi
+    // nahi hai — jaise hi upstream playlist khud #EXT-X-ENDLIST bhej deta
+    // hai (hls.js "live: false" report karta hai), poora recording pehle
+    // se hi turant available hota hai — SAME hls session/URL se, koi
+    // separate convert/wait/poll zaroori nahi.
+    function handleStreamEnded() {
+        if (hasEnded) return;
+        hasEnded = true;
+
+        overlay.classList.remove("hidden");
+        spinner.style.display = "none";
+        overlayMsg.style.display = "none";
+        endedBox.style.display = "flex";
+
+        var downloadUrl = "/api/pwlive/download?url=" + encodeURIComponent(RAW_URL);
+        btnDownload.href = downloadUrl;
+
+        btnWatch.onclick = function () {
+            // Watch Online — SAME hls session/source continues (ab poori
+            // recording available hai, seek/skip/speed enabled) — koi
+            // naya URL load karne ki zaroorat nahi.
+            overlay.classList.add("hidden");
+            liveBadge.classList.remove("show");
+            isLive = false;
+            btnGoLive.style.display = "none";
+            document.querySelectorAll(".vod-only").forEach(function (el) {
+                el.style.display = "";
+            });
+            document.querySelectorAll(".live-only").forEach(function (el) {
+                el.style.display = "none";
+            });
+            video.muted = false;
+            video.playbackRate = 1;
+            btnSpeed.textContent = "1x";
+            video.play().catch(function () {});
+        };
     }
 
-    // Same-origin proxy — chahe "player" mode ho ya "download" mode, yeh
-    // request hamesha isi domain pe jaati hai (relative URL), isliye CORS
-    // yahan kabhi issue nahi hota — sirf ek same-origin fetch hai.
-    const apiPath = mode === 'download' ? '/api/pwlive/download' : '/api/pwlive/player';
-    const url = apiPath + '?url=' + encodeURIComponent(rawUrl);
-
-    let hls = null;
-    let isLive = false;
-
-    video.addEventListener('canplay', function() {
-        loading.style.display = 'none';
+    var SPEEDS = [0.5, 1, 1.25, 1.5, 2];
+    btnSpeed.addEventListener("click", function () {
+        if (isLive) return;
+        var idx = SPEEDS.indexOf(video.playbackRate);
+        var next = SPEEDS[(idx + 1 + SPEEDS.length) % SPEEDS.length] || 1;
+        video.playbackRate = next;
+        btnSpeed.textContent = next + "x";
     });
 
-    video.addEventListener('error', function() {
-        showError('Failed to load');
+    btnSkipBack.addEventListener("click", function () {
+        if (isLive || !video.duration) return;
+        video.currentTime = Math.max(0, video.currentTime - 10);
+    });
+    btnSkipFwd.addEventListener("click", function () {
+        if (isLive || !video.duration) return;
+        video.currentTime = Math.min(video.duration, video.currentTime + 10);
     });
 
-    // ── Go Live — always visible while live. Red = behind the live edge
-    // (tap to jump to live). Grey = already watching live. ──────────────
-    function checkLiveEdge() {
-        if (!isLive || video.seekable.length === 0) return;
-        const edge = video.seekable.end(video.seekable.length - 1);
-        const behind = edge - video.currentTime;
-        goLiveBtn.classList.toggle('at-live', behind <= 15);
-    }
+    // mode=download → direct-CDN "Download Player" (/api/pwlive/download).
+    // Default → proxied "Live Player" (/api/pwlive/player). Same-origin
+    // request either way, so CORS never comes into play here.
+    var API_PATH = MODE === "download" ? "/api/pwlive/download" : "/api/pwlive/player";
+    var PLAYLIST_URL = API_PATH + "?url=" + encodeURIComponent(RAW_URL);
 
-    goLiveBtn.addEventListener('click', function() {
-        if (video.seekable.length === 0) return;
-        video.currentTime = video.seekable.end(video.seekable.length - 1);
-        video.play().catch(function() {});
-    });
+    function startLive() {
+        showLoading("Live class load ho rahi hai…");
 
-    // ── Fullscreen bracket [] tap → force landscape orientation ─────────
-    function lockLandscape() {
-        var lockable = screen.orientation && screen.orientation.lock;
-        if (lockable) {
-            screen.orientation.lock('landscape').catch(function() {});
-        }
-    }
-    function unlockOrientation() {
-        if (screen.orientation && screen.orientation.unlock) {
-            screen.orientation.unlock();
-        }
-    }
-    function isFullscreen() {
-        return !!(document.fullscreenElement || document.webkitFullscreenElement);
-    }
-    document.addEventListener('fullscreenchange', function() {
-        if (isFullscreen()) lockLandscape(); else unlockOrientation();
-    });
-    document.addEventListener('webkitfullscreenchange', function() {
-        if (isFullscreen()) lockLandscape(); else unlockOrientation();
-    });
-    // iOS Safari — native <video> fullscreen doesn't fire the events above.
-    video.addEventListener('webkitbeginfullscreen', lockLandscape);
-    video.addEventListener('webkitendfullscreen', unlockOrientation);
-
-    video.addEventListener('timeupdate', checkLiveEdge);
-    video.addEventListener('seeked', checkLiveEdge);
-
-    // window.__hlsLoadFailed set hota hai <script onerror> se agar jsdelivr
-    // CDN request hi fail ho gayi (network block waghera). typeof Hls ===
-    // 'undefined' check koi bhi doosri silent load-failure cover karta hai.
-    // Pehle yeh poora block unguarded tha, isliye YAHAN koi bhi failure
-    // (Hls missing, bad config option) uncaught throw karke pure script ko
-    // maar deti thi — isi wajah se live badge, go-live button, aur hamara
-    // apna loading/error UI kabhi dikhta hi nahi tha: sirf bare native
-    // <video controls> element reh jaata tha.
-    try {
-        if (window.__hlsLoadFailed || typeof Hls === 'undefined') {
-            throw new Error('hls-lib-unavailable');
+        if (window.__hlsLoadFailed || typeof Hls === "undefined") {
+            showError("Player library failed to load — check connection & refresh.");
+            return;
         }
 
         if (Hls.isSupported()) {
             hls = new Hls({
-                liveDurationInfinity: true,
-                enableWorker: true
+                enableWorker: true,
+                lowLatencyMode: true,
+                backBufferLength: 90,
+                liveSyncDurationCount: 3,
+                manifestLoadingMaxRetry: 6,
+                levelLoadingMaxRetry: 6,
+                fragLoadingMaxRetry: 6,
+                manifestLoadingRetryDelay: 1000,
+                levelLoadingRetryDelay: 1000,
+                fragLoadingRetryDelay: 1000,
             });
 
-            hls.loadSource(url);
-            hls.attachMedia(video);
-
-            hls.on(Hls.Events.MANIFEST_PARSED, function() {
-                video.play().catch(function() {});
+            hls.on(Hls.Events.MANIFEST_PARSED, function () {
+                manifestEverLoaded = true;
+                clearLoadWatchdog();
+                attemptAutoplay();
             });
 
-            hls.on(Hls.Events.LEVEL_LOADED, function(_evt, data) {
-                isLive = !!(data && data.details && data.details.live);
-                liveBadge.classList.toggle('show', isLive);
-                goLiveBtn.classList.toggle('show', isLive);
-                checkLiveEdge();
-            });
-
-            hls.on(Hls.Events.ERROR, function(_, data) {
-                if (data.fatal) {
-                    if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
-                        hls.startLoad();
-                    } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
-                        hls.recoverMediaError();
-                    } else {
-                        showError('Stream error — refresh the page.');
-                    }
+            hls.on(Hls.Events.LEVEL_LOADED, function (_, data) {
+                if (data.details && data.details.live === false) {
+                    handleStreamEnded();
+                }
+                if (data.details && typeof data.details.totalduration === "number") {
+                    liveDurationBase = data.details.totalduration;
+                    liveDurationBaseAt = Date.now();
                 }
             });
 
-        } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-            video.src = url;
-            isLive = true; // Safari native HLS doesn't expose this easily; assume live.
-            liveBadge.classList.add('show');
-            goLiveBtn.classList.add('show');
-            video.addEventListener('loadedmetadata', function() {
-                video.play().catch(function() {});
+            hls.on(Hls.Events.ERROR, function (_, data) {
+                if (!data.fatal) return;
+
+                if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+                    var neverStarted =
+                        data.details === "manifestLoadError" ||
+                        data.details === "manifestLoadTimeOut" ||
+                        data.details === "manifestParsingError";
+
+                    if (!manifestEverLoaded && neverStarted) {
+                        showError("The stream failed to load — the link has expired or the server is down, Please refresh after a while.");
+                        return;
+                    }
+                    if (!manifestEverLoaded) {
+                        return;
+                    }
+                    handleStreamEnded();
+                    hls.startLoad();
+                } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+                    hls.recoverMediaError();
+                } else {
+                    showError("Stream error — refresh the page after a while.");
+                }
+            });
+
+            armLoadWatchdog();
+            hls.loadSource(PLAYLIST_URL);
+            hls.attachMedia(video);
+
+        } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
+            video.src = PLAYLIST_URL;
+            armLoadWatchdog();
+            video.addEventListener("loadedmetadata", function () {
+                manifestEverLoaded = true;
+                clearLoadWatchdog();
+                attemptAutoplay();
             });
         } else {
-            showError('HLS not supported');
+            showError("HLS is not supported in this browser.");
         }
-    } catch (e) {
-        if (video.canPlayType('application/vnd.apple.mpegurl')) {
-            // hls.js load failed but native HLS is available (Safari) —
-            // fall back instead of leaving the player fully broken.
-            video.src = url;
-            isLive = true;
-            liveBadge.classList.add('show');
-            goLiveBtn.classList.add('show');
-            video.addEventListener('loadedmetadata', function() {
-                video.play().catch(function() {});
-            });
-        } else {
-            showError('Player library failed to load — check connection & refresh.');
+    }
+
+    video.addEventListener("playing", function () {
+        if (isLive) {
+            hideOverlay();
+            liveBadge.classList.add("show");
         }
+    });
+    video.addEventListener("error", function () {
+        if (video.getAttribute("src")) showError("Video error – please refresh and fix.");
+    });
+
+    video.addEventListener("ratechange", function () {
+        if (isLive && video.playbackRate !== 1) video.playbackRate = 1;
+    });
+
+    video.addEventListener("click", function () {
+        video.muted = false;
+        if (video.paused) video.play().catch(function () {});
+        else video.pause();
+    });
+
+    btnFullscreen.addEventListener("click", function () {
+        if (document.fullscreenElement) {
+            document.exitFullscreen();
+        } else if (shell.requestFullscreen) {
+            shell.requestFullscreen();
+        } else if (video.webkitEnterFullscreen) {
+            video.webkitEnterFullscreen();
+        }
+    });
+
+    function updateGoLiveState() {
+        if (!isLive) return;
+        var atLive = false;
+        if (hls && hls.liveSyncPosition) {
+            atLive = Math.abs(video.currentTime - hls.liveSyncPosition) < 8;
+        }
+        btnGoLive.classList.toggle("at-live", atLive);
+    }
+    btnGoLive.addEventListener("click", function () {
+        if (!isLive) return;
+        var edge = null;
+        if (hls && hls.liveSyncPosition) edge = hls.liveSyncPosition;
+        else if (video.seekable.length) edge = video.seekable.end(video.seekable.length - 1);
+        if (edge != null) {
+            video.currentTime = edge;
+            video.play().catch(function () {});
+        }
+    });
+
+    setInterval(function () {
+        try {
+            if (isLive) {
+                if (!video.paused && !video.ended && video.currentTime > 0) {
+                    if (!overlay.classList.contains("hidden")) hideOverlay();
+                    liveBadge.classList.add("show");
+                }
+                if (video.seekable.length) {
+                    var end = video.seekable.end(video.seekable.length - 1);
+                    var start = video.seekable.start(0);
+                    var pct = end > start ? ((video.currentTime - start) / (end - start)) * 100 : 0;
+                    progressBar.style.width = Math.min(100, Math.max(0, pct)) + "%";
+                }
+                if (liveDurationBase !== null) {
+                    var elapsed = liveDurationBase + (Date.now() - liveDurationBaseAt) / 1000;
+                    liveElapsedText.textContent = fmt(elapsed);
+                }
+                updateGoLiveState();
+            } else if (video.duration) {
+                progressBar.style.width = (video.currentTime / video.duration) * 100 + "%";
+                timeLabel.textContent = fmt(video.currentTime) + " / " + fmt(video.duration);
+            }
+        } catch (e) {}
+    }, 500);
+
+    function fmt(s) {
+        s = Math.floor(s || 0);
+        var h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+        return (h ? h + ":" : "") + String(m).padStart(2, "0") + ":" + String(sec).padStart(2, "0");
+    }
+
+    progressWrap.addEventListener("click", function (e) {
+        if (isLive) return;
+        if (!video.duration) return;
+        var rect = progressWrap.getBoundingClientRect();
+        video.currentTime = ((e.clientX - rect.left) / rect.width) * video.duration;
+    });
+
+    if (!RAW_URL) {
+        classTitle.textContent = "Error";
+        showError("URL missing — ?url=<index.m3u8> lagakar aao.");
+    } else {
+        startLive();
     }
 })();
 </script>
-
 </body>
 </html>
