@@ -392,7 +392,7 @@ ROUTES = {
     "player": f"{PUBLIC_BASE_URL}/api/pwlive/player?url=<index.m3u8 url here> — proxied playlist for the web player (same-origin, CORS-safe)",
     "download": f"{PUBLIC_BASE_URL}/api/pwlive/download?url=<index.m3u8 url here> — full playlist, real CDN URLs, all segments in parallel (play or hand to a download manager)",
     "seg": f"{PUBLIC_BASE_URL}/api/pwlive/seg?u=<token> — internal, used by the player route's rewritten playlist",
-    "watch": f"{PUBLIC_BASE_URL}/player?url=<index.m3u8 url here> — the actual watchable page (add &mode=download to watch via the direct-CDN download route instead)",
+    "watch": f"{PUBLIC_BASE_URL}/player?url=<index.m3u8 url here> — the actual watchable page (put &mode=download BEFORE &url= — i.e. /player?mode=download&url=... — to watch via the direct-CDN download route instead; url must stay last since it isn't required to be percent-encoded)",
 }
 
 
