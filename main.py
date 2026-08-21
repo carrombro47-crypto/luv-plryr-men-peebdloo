@@ -2,7 +2,7 @@ import base64
 import json
 import re
 import time
-from urllib.parse import urljoin, urlparse, parse_qsl, urlencode, urlunparse
+from urllib.parse import urljoin, urlparse, parse_qsl, urlencode, urlunparse, unquote
 
 import os
 import requests
@@ -79,6 +79,42 @@ def add_cors_headers(resp):
     resp.headers["Access-Control-Expose-Headers"] = "*"
     resp.headers["Access-Control-Max-Age"] = "86400"
     return resp
+
+
+def _raw_query_param(name: str):
+    """Robustly pull ?<name>=... straight from the RAW query string,
+    instead of Flask's normal split-on-'&' parsing.
+
+    Why: our routes each take exactly ONE meaningful param — a full CDN
+    m3u8/segment URL that has its own query string (Signature, Key-Pair-Id,
+    Policy, start, Expires...). If whoever builds the link forgets to
+    percent-encode that nested URL, its own '&'-separated params silently
+    become SIBLING params of our own endpoint instead of staying part of
+    the value — e.g.
+
+        /api/pwlive/player?url=https://cdn/x.m3u8?Signature=A&Key-Pair-Id=B&Policy=C
+
+    parses (by the normal rules) as four separate top-level params, and
+    `request.args.get("url")` only returns "...x.m3u8?Signature=A" — the
+    rest (crucially Key-Pair-Id) silently vanishes, and the CDN then
+    rejects the request with a confusing 403 "MissingKey" error.
+
+    Since none of our routes ever accept any other legitimate query
+    param, it's safe to just take everything in the raw query string
+    starting right after "<name>=" as the value, verbatim, whether or not
+    the caller percent-encoded it. Properly-encoded callers (our own
+    player.html included) get back exactly the same value as before.
+    """
+    qs = request.query_string.decode("utf-8", errors="replace")
+    marker = f"{name}="
+    if qs.startswith(marker):
+        raw_tail = qs[len(marker):]
+    else:
+        idx = qs.find("&" + marker)
+        if idx == -1:
+            return None
+        raw_tail = qs[idx + 1 + len(marker):]
+    return unquote(raw_tail) if raw_tail else None
 
 
 # ── base64 opaque tokens for the player-mode segment proxy ─────────────────
@@ -278,7 +314,7 @@ def health():
 
 @flask_app.route("/api/pwlive/player")
 def api_pwlive_player():
-    url = (request.args.get("url") or "").strip()
+    url = (_raw_query_param("url") or "").strip()
     if not url:
         return jsonify({"error": "URL missing"}), 400
 
@@ -304,7 +340,7 @@ def api_pwlive_player():
 
 @flask_app.route("/api/pwlive/download")
 def api_pwlive_download():
-    url = (request.args.get("url") or "").strip()
+    url = (_raw_query_param("url") or "").strip()
     if not url:
         return jsonify({"error": "URL missing"}), 400
 
@@ -333,7 +369,7 @@ def api_pwlive_seg():
     """Internal helper — fetches whatever the opaque token points to. Used
     only by playlists that /api/pwlive/player hands out. Binary segments
     pass straight through; nested playlists get rewritten again."""
-    token = request.args.get("u")
+    token = _raw_query_param("u")
     if not token:
         return jsonify({"error": "Missing segment token"}), 400
     try:
