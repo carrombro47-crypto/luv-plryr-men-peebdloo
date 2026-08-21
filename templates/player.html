@@ -75,11 +75,13 @@ html, body {
     50% { opacity: 0.2; }
 }
 
-/* Go Live — tap-only, top-right, only shown when behind the live edge */
+/* Go Live — right side, always visible while the stream is live.
+   Red = you're behind the live edge, tap to jump to live.
+   Grey = you're already watching live. */
 .go-live-btn {
     position: absolute;
-    top: 12px;
-    right: 12px;
+    top: 16px;
+    right: 16px;
     z-index: 10;
     display: none;
     align-items: center;
@@ -95,8 +97,13 @@ html, body {
     letter-spacing: 0.3px;
     text-transform: uppercase;
     cursor: pointer;
+    transition: background 0.2s, color 0.2s;
 }
 .go-live-btn.show { display: flex; }
+.go-live-btn.at-live {
+    background: rgba(255, 255, 255, 0.18);
+    color: rgba(255, 255, 255, 0.7);
+}
 
 /* Loading */
 .loading {
@@ -180,19 +187,13 @@ html, body {
         showError('Failed to load');
     });
 
-    // ── Go Live — tap-only, only visible when behind the live edge ──────
+    // ── Go Live — always visible while live. Red = behind the live edge
+    // (tap to jump to live). Grey = already watching live. ──────────────
     function checkLiveEdge() {
-        if (!isLive || video.seekable.length === 0) {
-            goLiveBtn.classList.remove('show');
-            return;
-        }
+        if (!isLive || video.seekable.length === 0) return;
         const edge = video.seekable.end(video.seekable.length - 1);
         const behind = edge - video.currentTime;
-        if (behind > 15) {
-            goLiveBtn.classList.add('show');
-        } else {
-            goLiveBtn.classList.remove('show');
-        }
+        goLiveBtn.classList.toggle('at-live', behind <= 15);
     }
 
     goLiveBtn.addEventListener('click', function() {
@@ -200,6 +201,31 @@ html, body {
         video.currentTime = video.seekable.end(video.seekable.length - 1);
         video.play().catch(function() {});
     });
+
+    // ── Fullscreen bracket [] tap → force landscape orientation ─────────
+    function lockLandscape() {
+        var lockable = screen.orientation && screen.orientation.lock;
+        if (lockable) {
+            screen.orientation.lock('landscape').catch(function() {});
+        }
+    }
+    function unlockOrientation() {
+        if (screen.orientation && screen.orientation.unlock) {
+            screen.orientation.unlock();
+        }
+    }
+    function isFullscreen() {
+        return !!(document.fullscreenElement || document.webkitFullscreenElement);
+    }
+    document.addEventListener('fullscreenchange', function() {
+        if (isFullscreen()) lockLandscape(); else unlockOrientation();
+    });
+    document.addEventListener('webkitfullscreenchange', function() {
+        if (isFullscreen()) lockLandscape(); else unlockOrientation();
+    });
+    // iOS Safari — native <video> fullscreen doesn't fire the events above.
+    video.addEventListener('webkitbeginfullscreen', lockLandscape);
+    video.addEventListener('webkitendfullscreen', unlockOrientation);
 
     video.addEventListener('timeupdate', checkLiveEdge);
     video.addEventListener('seeked', checkLiveEdge);
@@ -220,6 +246,7 @@ html, body {
         hls.on(Hls.Events.LEVEL_LOADED, function(_evt, data) {
             isLive = !!(data && data.details && data.details.live);
             liveBadge.classList.toggle('show', isLive);
+            goLiveBtn.classList.toggle('show', isLive);
             checkLiveEdge();
         });
 
@@ -239,6 +266,7 @@ html, body {
         video.src = url;
         isLive = true; // Safari native HLS doesn't expose this easily; assume live.
         liveBadge.classList.add('show');
+        goLiveBtn.classList.add('show');
         video.addEventListener('loadedmetadata', function() {
             video.play().catch(function() {});
         });
