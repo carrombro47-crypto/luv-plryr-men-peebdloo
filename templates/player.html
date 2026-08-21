@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
@@ -41,7 +41,7 @@ html, body {
     position: absolute;
     top: 16px;
     left: 16px;
-    display: flex;
+    display: none;
     align-items: center;
     gap: 8px;
     background: rgba(0, 0, 0, 0.7);
@@ -51,6 +51,7 @@ html, body {
     pointer-events: none;
     border-left: 3px solid #ff2d2d;
 }
+.live-badge.show { display: flex; }
 
 .live-dot {
     width: 8px;
@@ -73,6 +74,29 @@ html, body {
     0%, 100% { opacity: 1; }
     50% { opacity: 0.2; }
 }
+
+/* Go Live — tap-only, top-right, only shown when behind the live edge */
+.go-live-btn {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    z-index: 10;
+    display: none;
+    align-items: center;
+    gap: 6px;
+    background: #ff2d2d;
+    color: #fff;
+    border: none;
+    padding: 7px 14px;
+    border-radius: 6px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.3px;
+    text-transform: uppercase;
+    cursor: pointer;
+}
+.go-live-btn.show { display: flex; }
 
 /* Loading */
 .loading {
@@ -111,10 +135,12 @@ html, body {
         Loading...
     </div>
 
-    <div class="live-badge">
+    <div class="live-badge" id="liveBadge">
         <div class="live-dot"></div>
         <span class="live-text">LIVE</span>
     </div>
+
+    <button class="go-live-btn" id="goLiveBtn">⏵ Go Live</button>
 
     <video id="video" controls autoplay playsinline></video>
 </div>
@@ -123,30 +149,63 @@ html, body {
 (function() {
     const video = document.getElementById('video');
     const loading = document.getElementById('loading');
+    const liveBadge = document.getElementById('liveBadge');
+    const goLiveBtn = document.getElementById('goLiveBtn');
 
-    // 👇 URL page ke query parameter se aayega, e.g. mah.html?url=https://yoursite.com/stream.m3u8
-    const params = new URLSearchParams(window.location.search);
-    const url = params.get('url');
+    const rawUrl = new URLSearchParams(window.location.search).get('url');
 
-    if (!url) {
-        loading.innerHTML = '✕ No stream URL provided (?url=...)';
+    function showError(msg) {
+        loading.innerHTML = '✕ ' + msg;
         loading.style.color = 'rgba(255, 45, 45, 0.6)';
-        document.querySelector('.spinner').style.display = 'none';
+        const spinner = document.querySelector('.spinner');
+        if (spinner) spinner.style.display = 'none';
+    }
+
+    if (!rawUrl) {
+        showError('URL missing — ?url=&lt;index.m3u8&gt; lagakar aao.');
         return;
     }
+
+    // Same-origin proxy — real CDN URL never reaches the browser.
+    const url = '/api/pwlive/player?url=' + encodeURIComponent(rawUrl);
+
+    let hls = null;
+    let isLive = false;
 
     video.addEventListener('canplay', function() {
         loading.style.display = 'none';
     });
 
     video.addEventListener('error', function() {
-        loading.innerHTML = '✕ Failed to load';
-        loading.style.color = 'rgba(255, 45, 45, 0.6)';
-        document.querySelector('.spinner').style.display = 'none';
+        showError('Failed to load');
     });
 
+    // ── Go Live — tap-only, only visible when behind the live edge ──────
+    function checkLiveEdge() {
+        if (!isLive || video.seekable.length === 0) {
+            goLiveBtn.classList.remove('show');
+            return;
+        }
+        const edge = video.seekable.end(video.seekable.length - 1);
+        const behind = edge - video.currentTime;
+        if (behind > 15) {
+            goLiveBtn.classList.add('show');
+        } else {
+            goLiveBtn.classList.remove('show');
+        }
+    }
+
+    goLiveBtn.addEventListener('click', function() {
+        if (video.seekable.length === 0) return;
+        video.currentTime = video.seekable.end(video.seekable.length - 1);
+        video.play().catch(function() {});
+    });
+
+    video.addEventListener('timeupdate', checkLiveEdge);
+    video.addEventListener('seeked', checkLiveEdge);
+
     if (Hls.isSupported()) {
-        const hls = new Hls({
+        hls = new Hls({
             liveDurationInfinity: true,
             enableWorker: true
         });
@@ -158,26 +217,33 @@ html, body {
             video.play().catch(function() {});
         });
 
+        hls.on(Hls.Events.LEVEL_LOADED, function(_evt, data) {
+            isLive = !!(data && data.details && data.details.live);
+            liveBadge.classList.toggle('show', isLive);
+            checkLiveEdge();
+        });
+
         hls.on(Hls.Events.ERROR, function(_, data) {
             if (data.fatal) {
                 if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
                     hls.startLoad();
                 } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
                     hls.recoverMediaError();
+                } else {
+                    showError('Stream error — refresh the page.');
                 }
             }
         });
 
     } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-        // Safari / iOS native HLS support
         video.src = url;
+        isLive = true; // Safari native HLS doesn't expose this easily; assume live.
+        liveBadge.classList.add('show');
         video.addEventListener('loadedmetadata', function() {
             video.play().catch(function() {});
         });
     } else {
-        loading.innerHTML = '✕ HLS not supported';
-        loading.style.color = 'rgba(255, 45, 45, 0.6)';
-        document.querySelector('.spinner').style.display = 'none';
+        showError('HLS not supported');
     }
 })();
 </script>
