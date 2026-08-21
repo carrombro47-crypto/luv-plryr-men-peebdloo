@@ -22,12 +22,12 @@
     /* Ek jagah se poore player ka theme control hota hai — Live Player,
        Download Player, aur watch page teeno isi ek variable set ko use
        karte hain, isliye background hamesha consistent rehta hai. */
-    --bg: #e7e7ea;          /* light grey — jaisa maanga gaya */
-    --bg-video: #d9d9dd;    /* thoda darker light-grey letterbox bg */
-    --text-dim: rgba(20, 20, 22, 0.45);
-    --text-dim-strong: rgba(20, 20, 22, 0.65);
-    --spinner-track: rgba(20, 20, 22, 0.10);
-    --spinner-head: rgba(20, 20, 22, 0.35);
+    --bg: #dceaf7;          /* light blue */
+    --bg-video: #c9def2;    /* thoda darker light-blue letterbox bg */
+    --text-dim: rgba(15, 30, 50, 0.45);
+    --text-dim-strong: rgba(15, 30, 50, 0.65);
+    --spinner-track: rgba(15, 30, 50, 0.10);
+    --spinner-head: rgba(15, 30, 50, 0.35);
 }
 
 html, body {
@@ -216,14 +216,49 @@ html, body {
     window.addEventListener('resize', setRealVh);
     window.addEventListener('orientationchange', setRealVh);
 
-    const params = new URLSearchParams(window.location.search);
-    const rawUrl = params.get('url');
-    // ?mode=download → direct-CDN "Download Player" (uses /api/pwlive/download).
-    // Default (koi mode nahi, ya kuchh aur) → proxied "Live / Watch Player"
-    // (uses /api/pwlive/player). Dono EXACT same design/background share
-    // karte hain — sirf backend source alag hota hai.
-    const mode = (params.get('mode') || '').toLowerCase() === 'download' ? 'download' : 'player';
+    // ── Robust raw query-string parsing (mirrors main.py's
+    // _raw_query_param) ─────────────────────────────────────────────────
+    // Our ?url=<m3u8> value is itself a full CDN URL with its OWN query
+    // string (Signature/Key-Pair-Id/Policy/start — full of '&','=','~').
+    // The backend already handles this correctly via _raw_query_param,
+    // but this page was still using plain URLSearchParams() to read
+    // window.location.search — which silently truncates at the FIRST
+    // un-encoded '&' inside that nested URL. So pasting a raw (not
+    // encodeURIComponent()'d) CDN link straight into the address bar —
+    // e.g. /player?url=https://cdn/x.m3u8?Signature=A&Key-Pair-Id=B&Policy=C —
+    // lost everything after "Signature=A" (crucially Key-Pair-Id and
+    // Policy), and the CDN then rejected the now-incomplete signed
+    // request. THIS was the actual "live play nahi ho raha" bug — not
+    // CORS. Fix: read `url` from the RAW query string, taking everything
+    // from its marker to the end (exactly like the backend does), instead
+    // of letting URLSearchParams split on every '&' it finds.
+    //
+    // Convention: if you also want ?mode=download, put it BEFORE url —
+    // e.g. /player?mode=download&url=<m3u8> — because an unencoded `url`
+    // value (correctly) claims everything after it to the end of the
+    // string.
+    function rawQueryParam(name) {
+        var qs = window.location.search.replace(/^\?/, '');
+        var marker = name + '=';
+        var idx = qs.indexOf(marker);
+        while (idx !== -1 && idx !== 0 && qs[idx - 1] !== '&') {
+            idx = qs.indexOf(marker, idx + 1);
+        }
+        if (idx === -1) return null;
+        var tail = qs.slice(idx + marker.length);
+        try {
+            return decodeURIComponent(tail);
+        } catch (e) {
+            return tail; // already-plain text (no percent-encoding) — use as-is
+        }
+    }
+
+    const modeMatch = window.location.search.match(/[?&]mode=([^&]*)/);
+    const mode = ((modeMatch ? decodeURIComponent(modeMatch[1]) : '').toLowerCase() === 'download')
+        ? 'download' : 'player';
     modeChip.textContent = mode === 'download' ? 'Download Player' : 'Live Player';
+
+    const rawUrl = rawQueryParam('url');
 
     function showError(msg) {
         loading.innerHTML = '✕ ' + msg;
