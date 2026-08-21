@@ -8,6 +8,7 @@ import os
 import requests
 from requests.adapters import HTTPAdapter, Retry
 from flask import Flask, request, jsonify, Response, render_template
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  PW Live Proxy — simple, stateless. No login, no MongoDB, no file store,
@@ -21,6 +22,21 @@ flask_app = Flask(__name__)
 # error). `flask_app` stays as-is too, so the existing gunicorn command /
 # Render Docker deploy are completely unaffected.
 app = flask_app
+
+# Render/Vercel TLS ko apne reverse proxy pe terminate karte hain aur andar
+# plain HTTP forward karte hain. Isके bina Flask ka request.scheme (jo
+# `_rewrite_for_player` ke andar `request.host_url` se absolute
+# /api/pwlive/seg links banane me use hota hai) hamesha "http" resolve
+# hota — page khud https:// pe load hone ke bawajood. Result: generated
+# segment URLs http:// ban jaate the, aur browser un mixed-content
+# requests ko silently block kar deta — exactly wahi symptom jo screenshot
+# me dikha (native controls aa gaye, thumbnail broken, video 0:00 pe atka
+# hua, kabhi play hi nahi hota). ProxyFix Render/Vercel ke ek single
+# reverse-proxy hop ke X-Forwarded-Proto/Host/Port headers ko trust karta
+# hai taaki request.scheme/host_url sahi "https" resolve ho.
+flask_app.wsgi_app = ProxyFix(
+    flask_app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1
+)
 
 # Headers overridable via env vars (no redeploy needed if PW's CDN starts
 # requiring a different Referer/Origin/User-Agent — just set the env var
