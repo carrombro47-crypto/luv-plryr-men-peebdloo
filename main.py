@@ -8,6 +8,7 @@ import os
 import requests
 from requests.adapters import HTTPAdapter, Retry
 from flask import Flask, request, jsonify, Response, render_template
+from werkzeug.exceptions import HTTPException
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -23,17 +24,32 @@ flask_app = Flask(__name__)
 # Render Docker deploy are completely unaffected.
 app = flask_app
 
-# Render/Vercel TLS ko apne reverse proxy pe terminate karte hain aur andar
-# plain HTTP forward karte hain. Isके bina Flask ka request.scheme (jo
-# `_rewrite_for_player` ke andar `request.host_url` se absolute
-# /api/pwlive/seg links banane me use hota hai) hamesha "http" resolve
-# hota — page khud https:// pe load hone ke bawajood. Result: generated
-# segment URLs http:// ban jaate the, aur browser un mixed-content
-# requests ko silently block kar deta — exactly wahi symptom jo screenshot
-# me dikha (native controls aa gaye, thumbnail broken, video 0:00 pe atka
-# hua, kabhi play hi nahi hota). ProxyFix Render/Vercel ke ek single
-# reverse-proxy hop ke X-Forwarded-Proto/Host/Port headers ko trust karta
-# hai taaki request.scheme/host_url sahi "https" resolve ho.
+# ─────────────────────────────────────────────────────────────────────────
+#  PUBLIC_BASE_URL — the one fixed, known-good source of truth for this
+#  deploy's public https address.
+#
+#  Purane approach me hum `request.host_url` (Flask ke andar request se
+#  derive hone wala scheme+host) use karte the taaki /api/pwlive/seg wale
+#  absolute links banayein. Render/Vercel jaise platforms TLS ko apne
+#  reverse proxy pe terminate karke andar plain HTTP forward karte hain,
+#  isliye `request.scheme` reliably "https" resolve nahi hota tha (proxy
+#  hops, ProxyFix config, Cloudflare ke extra hop — sab is guess ko fragile
+#  bana dete the). Result: kabhi kabhi generated segment URLs "http://" ban
+#  jaate the jabki page khud "https://" pe load hoti — browser un
+#  mixed-content requests ko silently block kar deta, aur video kabhi play
+#  hi nahi hoti (native controls aa jaate, thumbnail broken, 0:00 pe atka).
+#
+#  Ab hum guess hi nahi karte — public base URL EK fixed constant hai
+#  (env var se override ho sakta hai agar deploy domain badle), hamesha
+#  "https://" ke saath. Yehi wajah hai ki neeche `_rewrite_for_player` me
+#  ab `request.host_url` ka koi use nahi hai.
+PUBLIC_BASE_URL = os.environ.get(
+    "PWLIVE_PUBLIC_BASE_URL", "https://luv-plryr-men-peebdloo-main.onrender.com"
+).rstrip("/")
+
+# ProxyFix still kept — client IP / X-Forwarded-For jaisi cheezon ke liye
+# sahi hai to have, lekin ab hamari apni URL-generation logic isse bilkul
+# independent hai (see PUBLIC_BASE_URL upar).
 flask_app.wsgi_app = ProxyFix(
     flask_app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1
 )
@@ -86,52 +102,67 @@ _session.mount("https://", _adapter)
 _session.mount("http://", _adapter)
 
 
-@flask_app.after_request
-def add_cors_headers(resp):
-    """CORS on every response — success ho ya error."""
+# ═══════════════════════════════════════════════════════════════════════════
+#  CORS — every response, every error path, no exceptions.
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _apply_cors(resp):
     resp.headers["Access-Control-Allow-Origin"] = "*"
     resp.headers["Access-Control-Allow-Methods"] = "GET, HEAD, OPTIONS"
-    # Wildcard "*" ke saath explicit "Range" bhi — kuch purane/strict HTTP
-    # clients wildcard ko preflight me Range jaise non-safelisted header ke
-    # liye poora honor nahi karte, explicit listing safe rehti hai.
+    # Wildcard "*" ke saath explicit "Range" bhi rakha — kuch purane/strict
+    # HTTP clients wildcard ko preflight me Range jaise non-safelisted
+    # header ke liye poora honor nahi karte, explicit listing safe rehti hai.
     resp.headers["Access-Control-Allow-Headers"] = "*, Range"
     resp.headers["Access-Control-Expose-Headers"] = "*"
     resp.headers["Access-Control-Max-Age"] = "86400"
-    # Cloudflare (ya koi bhi CDN) is response ko cache na kare aur baad me
-    # kisi doosre Origin ki request pe wahi cached CORS headers serve na
-    # kar de — Origin ke hisaab se response alag ho sakta hai, batate hain.
-    resp.headers["Vary"] = ", ".join(
-        filter(None, [resp.headers.get("Vary"), "Origin"])
-    )
+    # Cloudflare (ya koi bhi CDN) is response ko cache karke baad me kisi
+    # doosre Origin ki request pe wahi cached CORS headers serve na kar de.
+    existing_vary = resp.headers.get("Vary") or ""
+    vary_parts = [v.strip() for v in existing_vary.split(",") if v.strip()]
+    if "Origin" not in vary_parts:
+        vary_parts.append("Origin")
+    resp.headers["Vary"] = ", ".join(vary_parts)
     return resp
+
+
+@flask_app.after_request
+def add_cors_headers(resp):
+    """CORS on every response — success ho ya error."""
+    return _apply_cors(resp)
 
 
 @flask_app.before_request
 def handle_preflight():
     """Explicit, fast OPTIONS preflight — turant CORS headers ke saath 204
     return karo, kisi bhi route logic (upstream fetch, token decode, etc.)
-    ko chhue bina. Flask khud OPTIONS ko auto-handle karta hai, lekin agar
-    kabhi automatic_options disable ho ya koi aur middleware beech me aa
-    jaye, yeh explicit fast-path preflight ko kabhi bhi confuse/delay nahi
-    hone deta — video-loading me har extra round-trip/uncertainty seedha
-    "video load nahi ho raha" bankar dikhta hai."""
+    ko chhue bina. Flask khud OPTIONS auto-handle karta hai, lekin explicit
+    fast-path kabhi confuse/delay nahi hota — video-loading me har extra
+    round-trip/uncertainty seedha "video load nahi ho raha" bankar dikhta
+    hai, isliye yeh sabse pehle, sabse simple, guaranteed-correct hona
+    chahiye."""
     if request.method == "OPTIONS":
         return Response(status=204)
 
 
 @flask_app.errorhandler(Exception)
 def handle_any_error(e):
-    """Koi bhi uncaught exception (ya werkzeug ka apna HTTPException) bhi
-    CORS headers ke bina browser tak na pahunche — warna browser console
-    me generic "CORS error" dikhta hai jabki asli wajah kuchh aur hoti hai,
-    aur debug karna mushkil ho jaata hai. `after_request` waise bhi error
-    responses pe chalta hai, lekin yeh ek explicit safety net hai."""
-    from werkzeug.exceptions import HTTPException
-
+    """Koi bhi uncaught exception (404, 500, ya werkzeug ka koi bhi
+    HTTPException) bhi CORS headers ke bina browser tak na pahunche — warna
+    browser console me generic "CORS error" dikhta hai jabki asli wajah
+    kuchh aur hoti hai. `after_request` waise bhi error responses pe
+    chalta hai, lekin yeh ek explicit, guaranteed safety net hai."""
     if isinstance(e, HTTPException):
-        return jsonify({"error": e.description}), e.code
-    return jsonify({"error": f"Internal error: {e}"}), 500
+        resp = jsonify({"error": e.description})
+        resp.status_code = e.code or 500
+    else:
+        resp = jsonify({"error": f"Internal error: {e}"})
+        resp.status_code = 500
+    return _apply_cors(resp)
 
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  Helpers
+# ═══════════════════════════════════════════════════════════════════════════
 
 def _raw_query_param(name: str):
     """Robustly pull ?<name>=... straight from the RAW query string,
@@ -252,8 +283,8 @@ def _extract_upstream_error_detail(r):
 
 
 def _error_response(r):
-    """Uniform error JSON across all three routes: status + CDN's real
-    reason when we can extract one."""
+    """Uniform error JSON across all routes: status + CDN's real reason
+    when we can extract one."""
     body = {"error": f"Upstream failed: {r.status_code}"}
     detail = _extract_upstream_error_detail(r)
     if detail:
@@ -316,13 +347,14 @@ def _rewrite_lines(body: str, playlist_url: str, tok):
 
 def _rewrite_for_player(body: str, playlist_url: str) -> str:
     """PLAYER mode — every URL becomes a same-origin proxy token
-    (/api/pwlive/seg?u=...). Real CDN URL never reaches the browser."""
-    base = request.host_url.rstrip("/")
+    (PUBLIC_BASE_URL/api/pwlive/seg?u=...). Real CDN URL never reaches the
+    browser, and the base is always the fixed public https URL — never
+    guessed from the incoming request."""
 
     def tok(raw: str) -> str:
         absolute = urljoin(playlist_url, raw.strip())
         absolute = _inherit_auth_params(absolute, playlist_url)
-        return f"{base}/api/pwlive/seg?u={_b64e(absolute)}"
+        return f"{PUBLIC_BASE_URL}/api/pwlive/seg?u={_b64e(absolute)}"
 
     return _rewrite_lines(body, playlist_url, tok)
 
@@ -342,15 +374,25 @@ def _rewrite_for_download(body: str, playlist_url: str) -> str:
     return _rewrite_lines(body, playlist_url, tok)
 
 
+def _m3u8_response(body: str) -> Response:
+    return Response(
+        body,
+        200,
+        content_type="application/vnd.apple.mpegurl",
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+    )
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 #  Routes
 # ═══════════════════════════════════════════════════════════════════════════
 
 ROUTES = {
-    "player": "/api/pwlive/player?url=<m3u8-url> — proxied playlist for the web player (same-origin, CORS-safe)",
-    "download": "/api/pwlive/download?url=<m3u8-url> — full playlist, real CDN URLs, all segments in parallel (play or hand to a download manager)",
-    "seg": "/api/pwlive/seg?u=<token> — internal, used by the player route's rewritten playlist",
-    "watch": "/player?url=<m3u8-url> — the actual watchable page",
+    "base_url": PUBLIC_BASE_URL,
+    "player": f"{PUBLIC_BASE_URL}/api/pwlive/player?url=<index.m3u8 url here> — proxied playlist for the web player (same-origin, CORS-safe)",
+    "download": f"{PUBLIC_BASE_URL}/api/pwlive/download?url=<index.m3u8 url here> — full playlist, real CDN URLs, all segments in parallel (play or hand to a download manager)",
+    "seg": f"{PUBLIC_BASE_URL}/api/pwlive/seg?u=<token> — internal, used by the player route's rewritten playlist",
+    "watch": f"{PUBLIC_BASE_URL}/player?url=<index.m3u8 url here> — the actual watchable page (add &mode=download to watch via the direct-CDN download route instead)",
 }
 
 
@@ -381,13 +423,7 @@ def api_pwlive_player():
     if not r.ok:
         return _error_response(r)
 
-    body = _rewrite_for_player(r.text, url)
-    return Response(
-        body,
-        200,
-        content_type="application/vnd.apple.mpegurl",
-        headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
-    )
+    return _m3u8_response(_rewrite_for_player(r.text, url))
 
 
 @flask_app.route("/api/pwlive/download")
@@ -407,13 +443,7 @@ def api_pwlive_download():
     if not r.ok:
         return _error_response(r)
 
-    body = _rewrite_for_download(r.text, url)
-    return Response(
-        body,
-        200,
-        content_type="application/vnd.apple.mpegurl",
-        headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
-    )
+    return _m3u8_response(_rewrite_for_download(r.text, url))
 
 
 @flask_app.route("/api/pwlive/seg")
@@ -446,8 +476,7 @@ def api_pwlive_seg():
     ctype = (r.headers.get("Content-Type") or "").lower()
     if "mpegurl" in ctype or "m3u8" in ctype or parsed.path.lower().endswith(".m3u8"):
         # nested playlist — usko bhi player-mode me rewrite karo
-        body = _rewrite_for_player(r.text, url)
-        return Response(body, 200, content_type="application/vnd.apple.mpegurl")
+        return _m3u8_response(_rewrite_for_player(r.text, url))
 
     headers = {
         "Cache-Control": "public, max-age=30",
@@ -465,9 +494,13 @@ def api_pwlive_seg():
 
 @flask_app.route("/player")
 def player_page():
-    """The watch page — reads ?url= client-side and plays it via
-    /api/pwlive/player. Missing url shows an inline error, same as the API."""
-    return render_template("player.html")
+    """The watch page — reads ?url= (aur optional ?mode=download) client-
+    side aur us hisaab se /api/pwlive/player (default, proxied — 'Live /
+    Watch Player') ya /api/pwlive/download (mode=download — 'Download
+    Player') se play karta hai. Dono modes EXACT same design/background
+    share karte hain — sirf backend source alag hota hai. Missing url
+    inline error dikhata hai, same as the API."""
+    return render_template("player.html", public_base_url=PUBLIC_BASE_URL)
 
 
 def run_flask():
